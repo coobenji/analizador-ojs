@@ -1,0 +1,14 @@
+streamlit
+requests
+beautifulsoup4
+pandas
+urllib3
+matplotlib
+numpy
+plotly
+scikit-learn
+networkx
+wordcloud
+nltk
+reportlab
+openpyxl
