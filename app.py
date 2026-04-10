@@ -12,8 +12,12 @@ import time
 import re
 import io
 import json
+import gc
+import concurrent.futures
 from collections import Counter
 from itertools import combinations
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 import matplotlib
 matplotlib.use("Agg")
@@ -57,9 +61,23 @@ HEADERS = {
     "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
 }
 
-# ─────────────────────────────────────────
+# -------------------------------------------------
+# SESION ROBUSTA CON AUTO-REINTENTO
+# -------------------------------------------------
+def obtener_sesion_robusta():
+    session = requests.Session()
+    retries = Retry(total=3, backoff_factor=1.5, status_forcelist=[429, 500, 502, 503, 504])
+    adapter = HTTPAdapter(max_retries=retries, pool_connections=15, pool_maxsize=15)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    session.headers.update(HEADERS)
+    return session
+
+http_session = obtener_sesion_robusta()
+
+# -------------------------------------------------
 # PALETA DE COLORES AZUL PERSONALIZADA
-# ─────────────────────────────────────────
+# -------------------------------------------------
 PALETTE = {
     "50":  "#E8F4FB",
     "100": "#BCD9F0",
@@ -71,7 +89,7 @@ PALETTE = {
     "700": "#04507A",
     "800": "#033A5A",
     "900": "#02243A",
-    "950": "#038C7F",   # Teal accent
+    "950": "#038C7F",
     "teal": "#038C7F",
     "teal_light": "#04B2D9",
 }
@@ -94,11 +112,10 @@ def palette_color(key, alpha=1.0):
         return f"rgba({r},{g},{b},{alpha})"
     return PALETTE[key]
 
-# ─────────────────────────────────────────
+# -------------------------------------------------
 # STOPWORDS EXTENDIDAS PARA CLUSTERS
-# ─────────────────────────────────────────
+# -------------------------------------------------
 STOPWORDS_ACADEMICAS = {
-    # Palabras académicas genéricas (español)
     "articulo", "artículo", "libro", "capítulo", "capitulo", "revista",
     "journal", "paper", "estudio", "estudios", "análisis", "analisis",
     "investigación", "investigacion", "trabajo", "trabajos", "resultado",
@@ -107,7 +124,7 @@ STOPWORDS_ACADEMICAS = {
     "propósito", "propuesto", "revisión", "revision", "enfoque", "enfoques",
     "caso", "casos", "datos", "base", "bases", "sistema", "sistemas",
     "proceso", "procesos", "modelo", "modelos", "análise", "presente",
-    "mediante", "través", "través", "partir", "través", "hacia",
+    "mediante", "través", "partir", "hacia",
     "también", "asimismo", "además", "sin", "embargo", "aunque",
     "donde", "cual", "cuales", "cuyo", "cuyos", "cuya", "cuyas",
     "ante", "bajo", "sobre", "para", "este", "esta", "estos", "estas",
@@ -123,7 +140,6 @@ STOPWORDS_ACADEMICAS = {
     "parte", "partes", "área", "áreas", "campo", "campos", "tema", "temas",
     "información", "conocimiento", "perspectiva", "perspectivas",
     "contexto", "contextos", "situación", "situaciones",
-    # Palabras académicas genéricas (inglés)
     "article", "study", "studies", "research", "paper", "work", "analysis",
     "method", "methods", "result", "results", "conclusion", "approach",
     "approaches", "review", "reviews", "model", "models", "data", "based",
@@ -132,16 +148,14 @@ STOPWORDS_ACADEMICAS = {
     "process", "processes", "however", "also", "although", "well",
     "may", "can", "two", "three", "four", "five", "first", "second",
     "thus", "therefore", "whereas", "among", "within", "between",
-    # OJS / publicación
     "vol", "núm", "num", "pp", "doi", "issn", "http", "https", "www",
     "resumen", "abstract", "keywords", "palabras", "clave",
-    # Números y símbolos
     "año", "años", "mes", "meses", "figura", "tabla", "gráfico",
 }
 
-# ─────────────────────────────────────────
-# GEOCODIFICACIÓN
-# ─────────────────────────────────────────
+# -------------------------------------------------
+# GEOCODIFICACION
+# -------------------------------------------------
 COUNTRY_COORDS = {
     "mexico": (23.6345, -102.5528), "méxico": (23.6345, -102.5528),
     "argentina": (-38.4161, -63.6167), "brasil": (-14.235, -51.9253),
@@ -207,9 +221,9 @@ def geocodificar_pais(afiliacion_texto):
     return None, None, None
 
 
-# ─────────────────────────────────────────
+# -------------------------------------------------
 # NLTK setup
-# ─────────────────────────────────────────
+# -------------------------------------------------
 @st.cache_resource
 def load_stopwords():
     try:
@@ -229,19 +243,19 @@ def load_stopwords():
         return set(STOPWORDS_ACADEMICAS)
 
 
-# ─────────────────────────────────────────
+# -------------------------------------------------
 # PAGE CONFIG
-# ─────────────────────────────────────────
+# -------------------------------------------------
 st.set_page_config(
     page_title="Analizador OJS v5",
-    page_icon="🔵",
+    page_icon="O",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# ─────────────────────────────────────────
-# CUSTOM CSS — PALETA AZUL, TEXTO NEGRO
-# ─────────────────────────────────────────
+# -------------------------------------------------
+# CUSTOM CSS
+# -------------------------------------------------
 st.markdown(f"""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
@@ -380,25 +394,25 @@ html, body, [class*="css"] {{
 </style>
 """, unsafe_allow_html=True)
 
-# ─────────────────────────────────────────
+# -------------------------------------------------
 # HEADER
-# ─────────────────────────────────────────
+# -------------------------------------------------
 st.markdown("""
 <div class="main-header">
-    <h1> Analizador de Revistas OJS</h1>
-    <p>Extracción avanzada · Análisis de contenido · Filtrado por período · Mapa geográfico · Red interactiva con ORCID</p>
+    <h1>Analizador de Revistas OJS</h1>
+    <p>Extraccion avanzada · Analisis de contenido · Filtrado por periodo · Mapa geografico · Red interactiva con ORCID</p>
     <span class="version-badge">v5.0 · OJS 2.x / 3.x · Paleta azul · Excel + PDF mejorado</span>
 </div>
 """, unsafe_allow_html=True)
 
 
-# ═══════════════════════════════════════════════════════
-# ── SCRAPING ──────────────────────────────────────────
-# ═══════════════════════════════════════════════════════
+# =======================================================
+# SCRAPING
+# =======================================================
 
 def parsear_issue_metadata(texto, href):
     resultado = {
-        "titulo_original": texto, "issue_url": href, "tipo": "Artículo",
+        "titulo_original": texto, "issue_url": href, "tipo": "Articulo",
         "volumen": "", "numero": "", "anio": "", "issue": texto,
     }
     m_anio = re.search(r"\b(19|20)\d{2}\b", texto)
@@ -417,10 +431,10 @@ def parsear_issue_metadata(texto, href):
     tl = texto.lower()
     if any(x in tl for x in ["suplemento", "supplement", "supl"]):
         resultado["tipo"] = "Suplemento"
-    elif any(x in tl for x in ["especial", "special", "monográf"]):
+    elif any(x in tl for x in ["especial", "special", "monograf"]):
         resultado["tipo"] = "Especial"
     elif any(x in tl for x in ["número", "numero", "issue", "no.", "núm"]):
-        resultado["tipo"] = "Número"
+        resultado["tipo"] = "Numero"
     elif any(x in tl for x in ["volumen", "volume", "vol"]):
         resultado["tipo"] = "Volumen"
     elif re.search(r"\b(19|20)\d{2}\b", texto):
@@ -442,7 +456,7 @@ def extraer_issues_todas_paginas(url_base):
             continue
         paginas_visitadas.add(url_actual)
         try:
-            resp = requests.get(url_actual, headers=HEADERS, verify=False, timeout=15)
+            resp = http_session.get(url_actual, verify=False, timeout=15)
             resp.raise_for_status()
         except Exception as e:
             error = str(e)
@@ -491,7 +505,7 @@ def extraer_issues_todas_paginas(url_base):
                 url_pag = f"{url_limpia}{sep}page={page_n}"
                 if url_pag not in paginas_visitadas:
                     try:
-                        r_check = requests.get(url_pag, headers=HEADERS, verify=False, timeout=10)
+                        r_check = http_session.get(url_pag, verify=False, timeout=10)
                         check_soup = BeautifulSoup(r_check.text, "html.parser")
                         tiene_issues = any(
                             "/issue/view/" in a.get("href", "")
@@ -754,7 +768,7 @@ def extraer_afiliaciones_pais(soup, meta_tags, autores_lista):
 
 def scrape_articulo_completo(href):
     try:
-        resp = requests.get(href, headers=HEADERS, verify=False, timeout=15)
+        resp = http_session.get(href, verify=False, timeout=15)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
     except Exception:
@@ -793,7 +807,7 @@ def scrape_articulo_completo(href):
 
     paginacion = ""
     if meta_tags["pagina_inicio"] and meta_tags["pagina_fin"]:
-        paginacion = f"pp. {meta_tags['pagina_inicio']}–{meta_tags['pagina_fin']}"
+        paginacion = f"pp. {meta_tags['pagina_inicio']}-{meta_tags['pagina_fin']}"
 
     cc = ""
     for a_tag in soup.find_all("a", href=True):
@@ -844,7 +858,7 @@ def scrape_articulo_completo(href):
 
 def extraer_articulos_issue_completo(issue_url, issue_meta=None):
     try:
-        resp = requests.get(issue_url, headers=HEADERS, verify=False, timeout=15)
+        resp = http_session.get(issue_url, verify=False, timeout=20)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
     except Exception:
@@ -881,31 +895,43 @@ def extraer_articulos_issue_completo(issue_url, issue_meta=None):
             enlaces.append({"titulo": texto, "href": href, "autores_preview": autores_preview})
 
     articulos = []
-    for enlace in enlaces:
-        meta = scrape_articulo_completo(enlace["href"])
-        art = {
-            "articulo": enlace["titulo"],
-            "autores": meta.get("autores") or enlace["autores_preview"],
-            "articulo_url": enlace["href"], **meta,
-        }
-        if issue_meta:
-            art.update({
-                "issue": issue_meta.get("issue", ""),
-                "anio_issue": issue_meta.get("anio", ""),
-                "volumen_issue": issue_meta.get("volumen", ""),
-                "numero_issue": issue_meta.get("numero", ""),
-                "tipo_issue": issue_meta.get("tipo", ""),
-            })
-        if not art.get("anio_issue") and art.get("anio_pub"):
-            art["anio_issue"] = art["anio_pub"]
-        articulos.append(art)
-        time.sleep(0.25)
+
+    # Extraccion paralela: hasta 5 hilos simultaneos
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        futuros = {executor.submit(scrape_articulo_completo, enlace["href"]): enlace for enlace in enlaces}
+
+        for futuro in concurrent.futures.as_completed(futuros):
+            enlace = futuros[futuro]
+            try:
+                meta = futuro.result()
+                if meta:
+                    art = {
+                        "articulo": enlace["titulo"],
+                        "autores": meta.get("autores") or enlace["autores_preview"],
+                        "articulo_url": enlace["href"], **meta,
+                    }
+                    if issue_meta:
+                        art.update({
+                            "issue": issue_meta.get("issue", ""),
+                            "anio_issue": issue_meta.get("anio", ""),
+                            "volumen_issue": issue_meta.get("volumen", ""),
+                            "numero_issue": issue_meta.get("numero", ""),
+                            "tipo_issue": issue_meta.get("tipo", ""),
+                        })
+                    if not art.get("anio_issue") and art.get("anio_pub"):
+                        art["anio_issue"] = art["anio_pub"]
+                    articulos.append(art)
+            except Exception:
+                pass
+
+            time.sleep(0.05)
+
     return articulos
 
 
-# ═══════════════════════════════════════════════════════
-# ── FILTRADO POR PERÍODO ──────────────────────────────
-# ═══════════════════════════════════════════════════════
+# =======================================================
+# FILTRADO POR PERIODO
+# =======================================================
 
 def obtener_anios_disponibles(df):
     col = "anio_issue" if "anio_issue" in df.columns else "anio_pub"
@@ -931,7 +957,7 @@ def widget_selector_periodo(df, key_prefix="main"):
 
     st.markdown(f"""
     <div class="period-filter">
-        <h4> Filtro de período</h4>
+        <h4>Filtro de periodo</h4>
     </div>
     """, unsafe_allow_html=True)
 
@@ -958,14 +984,14 @@ def widget_selector_periodo(df, key_prefix="main"):
     pct = round(n_filtrado / n_total * 100, 1) if n_total > 0 else 0
 
     if n_filtrado < n_total:
-        st.info(f"📊 **{n_filtrado}** de **{n_total}** artículos ({pct}%) · Período: {rango[0]}–{rango[1]}")
+        st.info(f"{n_filtrado} de {n_total} articulos ({pct}%) · Periodo: {rango[0]}-{rango[1]}")
 
     return df_filtrado, rango[0], rango[1]
 
 
-# ═══════════════════════════════════════════════════════
-# ── GRÁFICAS CON PALETA AZUL ─────────────────────────
-# ═══════════════════════════════════════════════════════
+# =======================================================
+# GRAFICAS CON PALETA AZUL
+# =======================================================
 
 def fig_to_bytes(fig):
     buf = io.BytesIO()
@@ -975,7 +1001,6 @@ def fig_to_bytes(fig):
 
 
 def generar_nube_autores_bytes(df_aut, max_words=50):
-    """Genera nube de palabras optimizada y retorna bytes."""
     if df_aut.empty:
         return None
     try:
@@ -994,7 +1019,7 @@ def generar_nube_autores_bytes(df_aut, max_words=50):
         fig.patch.set_facecolor(PALETTE["50"])
         plt.tight_layout()
         img_bytes = fig_to_bytes(fig)
-        plt.close(fig) # Prevenir memory leaks
+        plt.close(fig)
         return img_bytes
     except Exception:
         return None
@@ -1032,17 +1057,17 @@ def generar_analisis_temporal(df_art):
                 color=conteo_anio["articulos"],
                 colorscale=BLUE_SCALE,
                 showscale=True,
-                colorbar=dict(title="Artículos", thickness=14),
+                colorbar=dict(title="Articulos", thickness=14),
                 line=dict(width=0),
             ),
             text=conteo_anio["articulos"],
             textposition="outside",
-            hovertemplate="<b>%{x}</b><br>Artículos: %{y}<extra></extra>",
+            hovertemplate="<b>%{x}</b><br>Articulos: %{y}<extra></extra>",
         ))
         fig_anio.update_layout(
-            title=dict(text="Artículos publicados por año", font=dict(size=16, color="#0a0a0a")),
+            title=dict(text="Articulos publicados por año", font=dict(size=16, color="#0a0a0a")),
             xaxis=dict(title="Año", tickangle=-45, type="category"),
-            yaxis=dict(title="Número de artículos"),
+            yaxis=dict(title="Numero de articulos"),
             plot_bgcolor=PALETTE["50"], paper_bgcolor="white",
             margin=dict(t=60, b=60, l=40, r=40),
             font=dict(color="#0a0a0a"),
@@ -1051,7 +1076,7 @@ def generar_analisis_temporal(df_art):
 
         fig_meta_anio = go.Figure()
         trazas = [
-            ("articulos", "Artículos totales", PALETTE["800"], "lines+markers", 3),
+            ("articulos", "Articulos totales", PALETTE["800"], "lines+markers", 3),
             ("con_doi", "Con DOI", PALETTE["600"], "lines+markers", 2),
             ("con_orcid", "Con ORCID", PALETTE["teal"], "lines+markers", 2),
             ("con_abstract", "Con Abstract", PALETTE["300"], "lines+markers", 1.5),
@@ -1067,9 +1092,9 @@ def generar_analisis_temporal(df_art):
                     marker=dict(size=7, color=color),
                 ))
         fig_meta_anio.update_layout(
-            title=dict(text="Evolución de metadatos por año", font=dict(size=16, color="#0a0a0a")),
+            title=dict(text="Evolucion de metadatos por año", font=dict(size=16, color="#0a0a0a")),
             xaxis=dict(title="Año", type="category"),
-            yaxis=dict(title="Artículos"),
+            yaxis=dict(title="Articulos"),
             plot_bgcolor=PALETTE["50"], paper_bgcolor="white",
             legend=dict(orientation="h", yanchor="bottom", y=-0.35),
             hovermode="x unified",
@@ -1098,7 +1123,7 @@ def generar_analisis_temporal(df_art):
             barmode="group",
             title=dict(text="Porcentaje de cobertura DOI y ORCID por año", font=dict(size=16, color="#0a0a0a")),
             xaxis=dict(title="Año", type="category"),
-            yaxis=dict(title="% Artículos", range=[0, 110]),
+            yaxis=dict(title="% Articulos", range=[0, 110]),
             plot_bgcolor=PALETTE["50"], paper_bgcolor="white",
             legend=dict(orientation="h", yanchor="bottom", y=-0.3),
             font=dict(color="#0a0a0a"),
@@ -1149,9 +1174,9 @@ def generar_analisis_temporal(df_art):
                 text=conteo_vol["articulos"], textposition="outside",
             ))
             fig_vol.update_layout(
-                title=dict(text="Artículos por volumen", font=dict(size=15, color="#0a0a0a")),
+                title=dict(text="Articulos por volumen", font=dict(size=15, color="#0a0a0a")),
                 xaxis=dict(title="Volumen", type="category"),
-                yaxis=dict(title="Artículos"),
+                yaxis=dict(title="Articulos"),
                 plot_bgcolor=PALETTE["50"], paper_bgcolor="white",
                 font=dict(color="#0a0a0a"),
             )
@@ -1163,9 +1188,9 @@ def generar_analisis_temporal(df_art):
 def grafica_metadatos_presencia(df, titulo_extra=""):
     campos = {
         "DOI": "tiene_doi", "ORCID": "tiene_orcid", "Keywords": "tiene_keywords",
-        "Abstract": "tiene_abstract", "Afiliación": "tiene_afiliacion",
-        "País autor": "tiene_pais", "Copyright": "tiene_copyright",
-        "Creative Commons": "tiene_cc", "Paginación": "tiene_paginacion",
+        "Abstract": "tiene_abstract", "Afiliacion": "tiene_afiliacion",
+        "Pais autor": "tiene_pais", "Copyright": "tiene_copyright",
+        "Creative Commons": "tiene_cc", "Paginacion": "tiene_paginacion",
     }
     nombres, porcentajes, counts = [], [], []
     n = len(df)
@@ -1193,7 +1218,7 @@ def grafica_metadatos_presencia(df, titulo_extra=""):
             text=f"Presencia de metadatos{' · ' + titulo_extra if titulo_extra else ''}",
             font=dict(size=15, color="#0a0a0a")
         ),
-        xaxis=dict(title="% de artículos", range=[0, 130]),
+        xaxis=dict(title="% de articulos", range=[0, 130]),
         yaxis=dict(title=""),
         plot_bgcolor=PALETTE["50"], paper_bgcolor="white",
         height=380, margin=dict(t=60, b=40, l=120, r=120),
@@ -1205,9 +1230,9 @@ def grafica_metadatos_presencia(df, titulo_extra=""):
 def grafica_metadatos_matplotlib(df, titulo_extra=""):
     campos = {
         "DOI": "tiene_doi", "ORCID": "tiene_orcid", "Keywords": "tiene_keywords",
-        "Abstract": "tiene_abstract", "Afiliación": "tiene_afiliacion",
-        "País autor": "tiene_pais", "Copyright": "tiene_copyright",
-        "Creative Commons": "tiene_cc", "Paginación": "tiene_paginacion",
+        "Abstract": "tiene_abstract", "Afiliacion": "tiene_afiliacion",
+        "Pais autor": "tiene_pais", "Copyright": "tiene_copyright",
+        "Creative Commons": "tiene_cc", "Paginacion": "tiene_paginacion",
     }
     nombres, porcentajes, counts = [], [], []
     n = len(df)
@@ -1223,7 +1248,7 @@ def grafica_metadatos_matplotlib(df, titulo_extra=""):
     fig, ax = plt.subplots(figsize=(10, 5.5))
     bars = ax.barh(nombres, porcentajes, color=colores, edgecolor="white", linewidth=0.5)
     ax.set_xlim(0, 130)
-    ax.set_xlabel("Porcentaje de artículos (%)", fontsize=10)
+    ax.set_xlabel("Porcentaje de articulos (%)", fontsize=10)
     titulo = f"Presencia de metadatos{' · ' + titulo_extra if titulo_extra else ''}"
     ax.set_title(titulo, fontsize=12, fontweight="bold", color="#0a0a0a")
     ax.axvline(x=50, color="gray", linestyle="--", alpha=0.4, linewidth=1)
@@ -1283,10 +1308,10 @@ def generar_mapa_autores(df_art):
         textposition="top center",
         hovertemplate=(
             "<b>%{text}</b><br>Autores: %{marker.color}<br>"
-            "Artículos: %{customdata[0]}<extra></extra>"
+            "Articulos: %{customdata[0]}<extra></extra>"
         ),
         customdata=df_pais[["articulos", "afiliaciones"]].values,
-        name="Países",
+        name="Paises",
     ))
 
     if len(df_pais) > 1:
@@ -1316,7 +1341,7 @@ def generar_mapa_autores(df_art):
 
     fig.update_layout(
         title=dict(
-            text="Distribución geográfica de autores y colaboraciones internacionales",
+            text="Distribucion geografica de autores y colaboraciones internacionales",
             x=0.5, font=dict(size=15, color="#0a0a0a"),
         ),
         geo=dict(
@@ -1345,15 +1370,15 @@ def generar_grafica_paises(df_art):
     if not registros:
         return None
     conteo = Counter(registros)
-    df_c = (pd.DataFrame(conteo.items(), columns=["País", "Autores"])
+    df_c = (pd.DataFrame(conteo.items(), columns=["Pais", "Autores"])
             .sort_values("Autores", ascending=True).tail(20))
     fig = go.Figure(go.Bar(
-        x=df_c["Autores"], y=df_c["País"], orientation="h",
+        x=df_c["Autores"], y=df_c["Pais"], orientation="h",
         marker=dict(color=df_c["Autores"], colorscale=BLUE_SCALE, line=dict(width=0)),
         text=df_c["Autores"], textposition="outside",
     ))
     fig.update_layout(
-        title=dict(text="Top países por número de autores", font=dict(size=15, color="#0a0a0a")),
+        title=dict(text="Top paises por numero de autores", font=dict(size=15, color="#0a0a0a")),
         xaxis=dict(title="Autores"),
         yaxis=dict(title=""),
         plot_bgcolor=PALETTE["50"], paper_bgcolor="white",
@@ -1364,9 +1389,9 @@ def generar_grafica_paises(df_art):
     return fig
 
 
-# ═══════════════════════════════════════════════════════
-# ── ANÁLISIS PRINCIPAL ────────────────────────────────
-# ═══════════════════════════════════════════════════════
+# =======================================================
+# ANALISIS PRINCIPAL
+# =======================================================
 
 def limpiar_texto(texto, stop_words):
     if pd.isna(texto) or not texto:
@@ -1382,7 +1407,6 @@ def limpiar_texto(texto, stop_words):
 
 
 def detectar_topico_regional(terminos_topico):
-    """Detecta si un tópico tiene orientación regional/geográfica."""
     palabras_regionales = {
         "mexico", "méxico", "latinoamerica", "latinoamérica", "america", "argentina",
         "colombia", "chile", "brasil", "peru", "región", "regional", "local",
@@ -1399,7 +1423,7 @@ def analizar_datos(df_art, n_clusters, n_topics, stop_words, progress_cb=None):
     resultados = {}
 
     if progress_cb:
-        progress_cb(0.05, "Estadísticas por número…")
+        progress_cb(0.05, "Estadisticas por numero...")
     conteo_issues = df_art.groupby("issue").size().reset_index(name="num_articulos")
     conteo_issues = conteo_issues.sort_values("num_articulos", ascending=False)
     resultados["conteo_issues"] = conteo_issues
@@ -1414,11 +1438,11 @@ def analizar_datos(df_art, n_clusters, n_topics, stop_words, progress_cb=None):
                  ha="center", va="bottom", fontsize=7.5)
     ax1.set_xticks(range(n_bars))
     ax1.set_xticklabels(
-        [t[:30] + "…" if len(t) > 30 else t for t in conteo_issues["issue"]],
+        [t[:30] + "..." if len(t) > 30 else t for t in conteo_issues["issue"]],
         rotation=45, ha="right", fontsize=6.5
     )
-    ax1.set_ylabel("Artículos")
-    ax1.set_title("Artículos por número (issue)", fontweight="bold", color="#0a0a0a")
+    ax1.set_ylabel("Articulos")
+    ax1.set_title("Articulos por numero (issue)", fontweight="bold", color="#0a0a0a")
     ax1.spines["top"].set_visible(False)
     ax1.spines["right"].set_visible(False)
     ax1.set_facecolor(PALETTE["50"])
@@ -1427,29 +1451,29 @@ def analizar_datos(df_art, n_clusters, n_topics, stop_words, progress_cb=None):
     plt.close(fig1)
 
     fig_issues_plotly = go.Figure(go.Bar(
-        x=conteo_issues["issue"].apply(lambda t: t[:35] + "…" if len(t) > 35 else t),
+        x=conteo_issues["issue"].apply(lambda t: t[:35] + "..." if len(t) > 35 else t),
         y=conteo_issues["num_articulos"],
         marker=dict(color=conteo_issues["num_articulos"], colorscale=BLUE_SCALE,
                     line=dict(width=0)),
         text=conteo_issues["num_articulos"], textposition="outside",
-        hovertemplate="<b>%{x}</b><br>Artículos: %{y}<extra></extra>",
+        hovertemplate="<b>%{x}</b><br>Articulos: %{y}<extra></extra>",
     ))
     fig_issues_plotly.update_layout(
-        title=dict(text="Artículos por número (issue)", font=dict(size=15, color="#0a0a0a")),
+        title=dict(text="Articulos por numero (issue)", font=dict(size=15, color="#0a0a0a")),
         xaxis=dict(title="", tickangle=-55, type="category"),
-        yaxis=dict(title="Artículos"),
+        yaxis=dict(title="Articulos"),
         plot_bgcolor=PALETTE["50"], paper_bgcolor="white",
         height=420, font=dict(color="#0a0a0a"),
     )
     resultados["fig_issues_plotly"] = fig_issues_plotly
 
     if progress_cb:
-        progress_cb(0.12, "Análisis temporal…")
+        progress_cb(0.12, "Analisis temporal...")
     figs_temp = generar_analisis_temporal(df_art)
     resultados["figs_temporales"] = figs_temp
 
     if progress_cb:
-        progress_cb(0.20, "Analizando presencia de metadatos…")
+        progress_cb(0.20, "Analizando presencia de metadatos...")
     fig_meta_plotly = grafica_metadatos_presencia(df_art)
     fig_meta_mpl = grafica_metadatos_matplotlib(df_art)
     resultados["fig_metadatos_plotly"] = fig_meta_plotly
@@ -1457,7 +1481,7 @@ def analizar_datos(df_art, n_clusters, n_topics, stop_words, progress_cb=None):
     plt.close(fig_meta_mpl)
 
     if progress_cb:
-        progress_cb(0.28, "Analizando autores…")
+        progress_cb(0.28, "Analizando autores...")
     todos_autores = []
     for x in df_art["autores"].dropna():
         todos_autores.extend([a.strip() for a in x.split(",") if a.strip()])
@@ -1479,8 +1503,8 @@ def analizar_datos(df_art, n_clusters, n_topics, stop_words, progress_cb=None):
         text=top20["num_articulos"], textposition="outside",
     ))
     fig_aut_plotly.update_layout(
-        title=dict(text="Top 20 autores por producción", font=dict(size=15, color="#0a0a0a")),
-        xaxis=dict(title="Artículos"),
+        title=dict(text="Top 20 autores por produccion", font=dict(size=15, color="#0a0a0a")),
+        xaxis=dict(title="Articulos"),
         yaxis=dict(title="", autorange="reversed"),
         plot_bgcolor=PALETTE["50"], paper_bgcolor="white",
         height=500, margin=dict(l=200, r=80),
@@ -1496,7 +1520,7 @@ def analizar_datos(df_art, n_clusters, n_topics, stop_words, progress_cb=None):
         ax2.text(w + 0.05, bar.get_y() + bar.get_height()/2, str(int(w)),
                  ha="left", va="center", fontsize=8)
     ax2.invert_yaxis()
-    ax2.set_xlabel("Artículos")
+    ax2.set_xlabel("Articulos")
     ax2.set_title("Top 20 autores", fontweight="bold", color="#0a0a0a")
     ax2.spines["top"].set_visible(False)
     ax2.spines["right"].set_visible(False)
@@ -1506,7 +1530,7 @@ def analizar_datos(df_art, n_clusters, n_topics, stop_words, progress_cb=None):
     plt.close(fig2)
 
     if progress_cb:
-        progress_cb(0.36, "Generando mapa geográfico…")
+        progress_cb(0.36, "Generando mapa geografico...")
     fig_mapa, df_mapa = generar_mapa_autores(df_art)
     resultados["fig_mapa"] = fig_mapa
     resultados["df_mapa"] = df_mapa
@@ -1514,7 +1538,7 @@ def analizar_datos(df_art, n_clusters, n_topics, stop_words, progress_cb=None):
     resultados["fig_paises"] = fig_paises
 
     if progress_cb:
-        progress_cb(0.44, "Construyendo matriz TF-IDF…")
+        progress_cb(0.44, "Construyendo matriz TF-IDF...")
     df_art["texto_combinado"] = df_art.apply(
         lambda x: f"{x['articulo']} {x.get('resumen', '')} {x.get('keywords', '')}", axis=1)
     df_art["texto_limpio"] = df_art["texto_combinado"].apply(
@@ -1531,7 +1555,7 @@ def analizar_datos(df_art, n_clusters, n_topics, stop_words, progress_cb=None):
     resultados["vectorizer"] = vectorizer
 
     if progress_cb:
-        progress_cb(0.54, f"KMeans (k={n_clusters})…")
+        progress_cb(0.54, f"KMeans (k={n_clusters})...")
     n_cl = min(n_clusters, len(df_valido))
     kmeans = KMeans(n_clusters=n_cl, random_state=42, n_init=10)
     kmeans.fit(tfidf_matrix)
@@ -1553,9 +1577,9 @@ def analizar_datos(df_art, n_clusters, n_topics, stop_words, progress_cb=None):
         text=conteo_clusters["num_articulos"], textposition="outside",
     ))
     fig_cl_plotly.update_layout(
-        title=dict(text="Distribución por cluster temático", font=dict(size=15, color="#0a0a0a")),
+        title=dict(text="Distribucion por cluster tematico", font=dict(size=15, color="#0a0a0a")),
         xaxis=dict(title="Cluster", type="category"),
-        yaxis=dict(title="Artículos"),
+        yaxis=dict(title="Articulos"),
         plot_bgcolor=PALETTE["50"], paper_bgcolor="white",
         font=dict(color="#0a0a0a"),
     )
@@ -1567,8 +1591,8 @@ def analizar_datos(df_art, n_clusters, n_topics, stop_words, progress_cb=None):
     for i, v in enumerate(conteo_clusters["num_articulos"]):
         ax3.text(i, v + 0.1, str(v), ha="center", va="bottom", fontsize=9)
     ax3.set_xlabel("Cluster")
-    ax3.set_ylabel("Artículos")
-    ax3.set_title("Distribución por cluster", color="#0a0a0a")
+    ax3.set_ylabel("Articulos")
+    ax3.set_title("Distribucion por cluster", color="#0a0a0a")
     ax3.spines["top"].set_visible(False)
     ax3.set_facecolor(PALETTE["50"])
     plt.tight_layout()
@@ -1576,7 +1600,7 @@ def analizar_datos(df_art, n_clusters, n_topics, stop_words, progress_cb=None):
     plt.close(fig3)
 
     if progress_cb:
-        progress_cb(0.62, "Proyección PCA…")
+        progress_cb(0.62, "Proyeccion PCA...")
     pca = PCA(n_components=2, random_state=42)
     tfidf_pca = pca.fit_transform(tfidf_matrix.toarray())
 
@@ -1600,7 +1624,7 @@ def analizar_datos(df_art, n_clusters, n_topics, stop_words, progress_cb=None):
             hovertemplate="<b>Cluster " + str(c) + "</b><br>%{text}<extra></extra>",
         ))
     fig_pca_plotly.update_layout(
-        title=dict(text="Proyección PCA de clusters temáticos", font=dict(size=15, color="#0a0a0a")),
+        title=dict(text="Proyeccion PCA de clusters tematicos", font=dict(size=15, color="#0a0a0a")),
         xaxis=dict(title="Componente Principal 1"),
         yaxis=dict(title="Componente Principal 2"),
         plot_bgcolor=PALETTE["50"], paper_bgcolor="white",
@@ -1614,7 +1638,7 @@ def analizar_datos(df_art, n_clusters, n_topics, stop_words, progress_cb=None):
                           c=df_valido["cluster"], cmap="Blues",
                           s=55, alpha=0.8, edgecolors="white", linewidths=0.5)
     plt.colorbar(scatter, ax=ax4, label="Cluster")
-    ax4.set_title("PCA de clusters temáticos", color="#0a0a0a")
+    ax4.set_title("PCA de clusters tematicos", color="#0a0a0a")
     ax4.set_xlabel("PC1")
     ax4.set_ylabel("PC2")
     ax4.grid(True, alpha=0.2)
@@ -1624,7 +1648,7 @@ def analizar_datos(df_art, n_clusters, n_topics, stop_words, progress_cb=None):
     plt.close(fig4)
 
     if progress_cb:
-        progress_cb(0.70, f"LDA ({n_topics} tópicos)…")
+        progress_cb(0.70, f"LDA ({n_topics} topicos)...")
     n_top = min(n_topics, len(df_valido))
     lda = LatentDirichletAllocation(n_components=n_top, random_state=42, max_iter=25)
     lda.fit(tfidf_matrix)
@@ -1634,7 +1658,6 @@ def analizar_datos(df_art, n_clusters, n_topics, stop_words, progress_cb=None):
     top_terms_topics = {i: [terms[j] for j in topic.argsort()[:-13:-1]]
                         for i, topic in enumerate(lda.components_)}
 
-    # Detectar tópicos regionales
     topicos_regionales = {}
     for t_idx, t_terms in top_terms_topics.items():
         es_regional, coincidencias = detectar_topico_regional(t_terms)
@@ -1660,7 +1683,7 @@ def analizar_datos(df_art, n_clusters, n_topics, stop_words, progress_cb=None):
             axw.imshow(wc, interpolation="bilinear")
             axw.axis("off")
             label_regional = " [REGIONAL]" if t in topicos_regionales else ""
-            axw.set_title(f"Tópico {t}{label_regional}: {', '.join(top_terms_topics[t][:5])}",
+            axw.set_title(f"Topico {t}{label_regional}: {', '.join(top_terms_topics[t][:5])}",
                           fontsize=10, color="#0a0a0a")
             plt.tight_layout()
             wc_figs.append(fig_to_bytes(figw))
@@ -1673,7 +1696,7 @@ def analizar_datos(df_art, n_clusters, n_topics, stop_words, progress_cb=None):
     resultados["tabla_topicos"] = tabla_topicos
 
     if progress_cb:
-        progress_cb(0.80, "Distribución de tópicos por número…")
+        progress_cb(0.80, "Distribucion de topicos por numero...")
 
     topico_colors = [
         PALETTE["100"], PALETTE["200"], PALETTE["300"], PALETTE["400"], PALETTE["500"],
@@ -1682,7 +1705,7 @@ def analizar_datos(df_art, n_clusters, n_topics, stop_words, progress_cb=None):
     fig_top_plotly = go.Figure()
     for t in range(n_top):
         if t in tabla_topicos.columns:
-            name_label = f"Tópico {t}" + (" 🌍" if t in topicos_regionales else "")
+            name_label = f"Topico {t}" + (" [R]" if t in topicos_regionales else "")
             fig_top_plotly.add_trace(go.Bar(
                 name=name_label,
                 x=tabla_topicos.index.astype(str),
@@ -1691,9 +1714,9 @@ def analizar_datos(df_art, n_clusters, n_topics, stop_words, progress_cb=None):
             ))
     fig_top_plotly.update_layout(
         barmode="stack",
-        title=dict(text="Distribución de tópicos por número (🌍 = regional)", font=dict(size=15, color="#0a0a0a")),
-        xaxis=dict(title="Número", tickangle=-45, type="category"),
-        yaxis=dict(title="Artículos"),
+        title=dict(text="Distribucion de topicos por numero ([R] = regional)", font=dict(size=15, color="#0a0a0a")),
+        xaxis=dict(title="Numero", tickangle=-45, type="category"),
+        yaxis=dict(title="Articulos"),
         plot_bgcolor=PALETTE["50"], paper_bgcolor="white",
         legend=dict(orientation="h", yanchor="bottom", y=-0.35),
         height=480,
@@ -1704,18 +1727,18 @@ def analizar_datos(df_art, n_clusters, n_topics, stop_words, progress_cb=None):
     fig5, ax5 = plt.subplots(figsize=(14, 5))
     tabla_topicos.plot(kind="bar", stacked=True, ax=ax5,
                        color=[topico_colors[t % len(topico_colors)] for t in range(len(tabla_topicos.columns))])
-    ax5.set_title("Distribución de tópicos por número", color="#0a0a0a")
-    ax5.set_xlabel("Número")
-    ax5.set_ylabel("Artículos")
+    ax5.set_title("Distribucion de topicos por numero", color="#0a0a0a")
+    ax5.set_xlabel("Numero")
+    ax5.set_ylabel("Articulos")
     plt.xticks(rotation=45, ha="right", fontsize=7)
-    ax5.legend(title="Tópico", bbox_to_anchor=(1.05, 1), loc="upper left", fontsize=8)
+    ax5.legend(title="Topico", bbox_to_anchor=(1.05, 1), loc="upper left", fontsize=8)
     ax5.set_facecolor(PALETTE["50"])
     plt.tight_layout()
     resultados["fig_topicos_issue"] = fig_to_bytes(fig5)
     plt.close(fig5)
 
     if progress_cb:
-        progress_cb(0.90, "Red de coautoría…")
+        progress_cb(0.90, "Red de coautoria...")
 
     df_valido_copy = df_valido.copy()
     df_valido_copy["autores_lista"] = df_valido_copy["autores"].apply(
@@ -1727,7 +1750,6 @@ def analizar_datos(df_art, n_clusters, n_topics, stop_words, progress_cb=None):
         if isinstance(autores, list) and len(autores) > 1:
             edges.extend(list(combinations(autores, 2)))
 
-    # Mapa ORCID global
     orcid_map = {}
     for _, row in df_valido_copy.iterrows():
         orcids_art = row.get("orcids", {})
@@ -1809,7 +1831,7 @@ def analizar_datos(df_art, n_clusters, n_topics, stop_words, progress_cb=None):
         labels_filtrados = {n: n for n in G.nodes() if G.nodes[n].get("articulos", 1) >= 2}
         nx.draw_networkx_labels(G, pos, labels=labels_filtrados, font_size=6.5, ax=ax6,
                                 font_color=PALETTE["900"])
-        ax6.set_title("Red de coautoría · tamaño=artículos · color=tópico · 🔗=ORCID: "
+        ax6.set_title("Red de coautoria · tamano=articulos · color=topico · con ORCID: "
                       + str(sum(1 for n in G.nodes() if G.nodes[n].get("orcid"))),
                       fontsize=12, color="#0a0a0a")
         ax6.axis("off")
@@ -1819,17 +1841,17 @@ def analizar_datos(df_art, n_clusters, n_topics, stop_words, progress_cb=None):
         plt.close(fig6)
 
     if progress_cb:
-        progress_cb(1.0, "Análisis completado ✓")
+        progress_cb(1.0, "Analisis completado.")
     return resultados
 
 
-# ═══════════════════════════════════════════════════════
-# ── RED INTERACTIVA CON ORCID ─────────────────────────
-# ═══════════════════════════════════════════════════════
+# =======================================================
+# RED INTERACTIVA CON ORCID
+# =======================================================
 
 def generar_red_interactiva_html(G, orcid_map, df_art):
     if G.number_of_nodes() == 0:
-        return "<p style='color:#BCD9F0;padding:2rem;'>No hay datos de coautoría para este período.</p>"
+        return f"<p style='color:{PALETTE['200']};padding:2rem;'>No hay datos de coautoria para este periodo.</p>"
 
     nodes_data = []
     blue_shades_net = [
@@ -1847,9 +1869,9 @@ def generar_red_interactiva_html(G, orcid_map, df_art):
         color = blue_shades_net[int(topico) % len(blue_shades_net)]
         has_orcid = bool(orcid_url)
 
-        label = nodo[:20] + ("…" if len(nodo) > 20 else "")
+        label = nodo[:20] + ("..." if len(nodo) > 20 else "")
         if has_orcid:
-            label = "🔗 " + label
+            label = "[O] " + label
 
         node_obj = {
             "id": nodo, "label": label,
@@ -1857,12 +1879,12 @@ def generar_red_interactiva_html(G, orcid_map, df_art):
             "title": (
                 f"<div style='font-family:Space Grotesk,sans-serif;padding:8px;min-width:200px;'>"
                 f"<b style='color:{PALETTE['600']};font-size:14px;'>{nodo}</b><br>"
-                f"<span style='color:#333;'>📄 Artículos: <b>{n_arts}</b></span><br>"
-                f"<span style='color:#333;'>🏷️ Tópico: <b>{topico}</b></span><br>"
-                f"<span style='color:#333;'>🌍 País: <b>{pais or 'No detectado'}</b></span><br>"
-                f"<span style='color:#333;'>🏛️ {afil[:60] + '…' if len(afil) > 60 else afil}</span><br>"
+                f"<span style='color:#333;'>Articulos: <b>{n_arts}</b></span><br>"
+                f"<span style='color:#333;'>Topico: <b>{topico}</b></span><br>"
+                f"<span style='color:#333;'>Pais: <b>{pais or 'No detectado'}</b></span><br>"
+                f"<span style='color:#333;'>{afil[:60] + '...' if len(afil) > 60 else afil}</span><br>"
                 + (f'<a href="{orcid_url}" target="_blank" style="color:{PALETTE["teal"]};font-weight:600;">'
-                   f'🔗 Ver perfil ORCID →</a>'
+                   f'Ver perfil ORCID</a>'
                    if orcid_url else
                    '<span style="color:#aaa;">Sin ORCID registrado</span>')
                 + "</div>"
@@ -1939,10 +1961,10 @@ body{{background:{PALETTE["800"]};font-family:'Space Grotesk',sans-serif;color:{
 <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
 </head><body>
 <div id="controls">
-  <input type="text" id="search-input" placeholder="🔍 Buscar autor, país o institución…" oninput="filtrarAutor()">
-  <button class="btn" onclick="resetearVista()">↺ Resetear</button>
-  <button class="btn" onclick="mostrarTodos()">⊕ Centrar</button>
-  <button class="btn teal" onclick="resaltarConOrcid()">🔗 Solo con ORCID</button>
+  <input type="text" id="search-input" placeholder="Buscar autor, pais o institucion..." oninput="filtrarAutor()">
+  <button class="btn" onclick="resetearVista()">Resetear</button>
+  <button class="btn" onclick="mostrarTodos()">Centrar</button>
+  <button class="btn teal" onclick="resaltarConOrcid()">Solo con ORCID</button>
   <span style="font-size:11px;color:{PALETTE["300"]};margin-left:auto;font-family:'JetBrains Mono',monospace;">
     Clic=detalles · Doble clic=ORCID
   </span>
@@ -1951,12 +1973,12 @@ body{{background:{PALETTE["800"]};font-family:'Space Grotesk',sans-serif;color:{
   <div class="stat-item">Nodos: <span id="s-nodes">0</span></div>
   <div class="stat-item">Aristas: <span id="s-edges">0</span></div>
   <div class="stat-item">Con ORCID: <span id="s-orcid">0</span></div>
-  <div class="stat-item">Países: <span id="s-paises">0</span></div>
-  <div class="stat-item">Seleccionado: <span id="s-sel">—</span></div>
+  <div class="stat-item">Paises: <span id="s-paises">0</span></div>
+  <div class="stat-item">Seleccionado: <span id="s-sel">-</span></div>
 </div>
 <div id="network"></div>
 <div id="info-panel">
-  <span style="color:{PALETTE["300"]};">↑ Selecciona un nodo para ver detalles y colaboraciones.</span>
+  <span style="color:{PALETTE["300"]};">Selecciona un nodo para ver detalles y colaboraciones.</span>
 </div>
 <script>
 const nodesData={nodes_json};
@@ -2006,23 +2028,23 @@ network.on('click',function(p){{
     const rel=new Set([nodeId,...vecinos]);
     nodes.update(nodesData.map(n=>({{...n,opacity:rel.has(n.id)?1.0:0.12}})));
     const vecList=[...vecinos].slice(0,12).map(v=>
-      `<span class="tag">👤 ${{v.length>20?v.substr(0,20)+'…':v}}</span>`
+      `<span class="tag">${{v.length>20?v.substr(0,20)+'...':v}}</span>`
     ).join(" ");
     const orcidHtml=ni.orcid
-      ?`<a href="${{ni.orcid}}" target="_blank" class="orcid-badge">🔗 Ver perfil ORCID →</a>`
+      ?`<a href="${{ni.orcid}}" target="_blank" class="orcid-badge">Ver perfil ORCID</a>`
       :'<span style="color:#aaa;font-size:11px;">Sin ORCID registrado</span>';
-    document.getElementById('s-sel').textContent=nodeId.length>20?nodeId.substr(0,20)+'…':nodeId;
+    document.getElementById('s-sel').textContent=nodeId.length>20?nodeId.substr(0,20)+'...':nodeId;
     document.getElementById('info-panel').innerHTML=`
-      <h4>👤 ${{nodeId}}</h4>
+      <h4>${{nodeId}}</h4>
       <div style="margin-bottom:6px;color:{PALETTE["100"]};">
-        📄 <b>${{ni.articulos}}</b> artículos · 🏷️ Tópico <b>${{ni.topico}}</b> · 🌍 <b>${{ni.pais||'Sin país'}}</b>
+        <b>${{ni.articulos}}</b> articulos · Topico <b>${{ni.topico}}</b> · <b>${{ni.pais||'Sin pais'}}</b>
       </div>
-      ${{ni.afiliacion?`<div style="color:{PALETTE["200"]};font-size:11px;margin-bottom:6px;">🏛️ ${{ni.afiliacion}}</div>`:''}}
+      ${{ni.afiliacion?`<div style="color:{PALETTE["200"]};font-size:11px;margin-bottom:6px;">${{ni.afiliacion}}</div>`:''}}
       <div style="margin-bottom:6px;">${{orcidHtml}}</div>
       <div><b style="color:{PALETTE["300"]};">Co-autores (${{vecinos.size}}):</b> ${{vecList||"<span style='color:#aaa;'>Ninguno</span>"}}</div>`;
   }}else{{
     resetearVista();
-    document.getElementById('s-sel').textContent='—';
+    document.getElementById('s-sel').textContent='-';
   }}
 }});
 
@@ -2036,7 +2058,7 @@ network.on('doubleClick',function(p){{
 
 function resetearVista(){{
   nodes.update(nodesData.map(n=>({{...n,opacity:1.0}})));
-  document.getElementById('info-panel').innerHTML='<span style="color:{PALETTE["300"]};">↑ Selecciona un nodo para ver detalles.</span>';
+  document.getElementById('info-panel').innerHTML='<span style="color:{PALETTE["300"]};">Selecciona un nodo para ver detalles.</span>';
   network.fit({{animation:{{duration:500,easingFunction:'easeInOutQuad'}}}});
 }}
 function mostrarTodos(){{network.fit({{animation:{{duration:400}}}});}}
@@ -2045,7 +2067,7 @@ function resaltarConOrcid(){{
   if(conOrcid.size===0){{alert('No se encontraron autores con ORCID.');return;}}
   nodes.update(nodesData.map(n=>({{...n,opacity:conOrcid.has(n.id)?1.0:0.08}})));
   document.getElementById('info-panel').innerHTML=
-    `<span style="color:{PALETTE["400"]};">🔗 <b>${{conOrcid.size}}</b> autores con ORCID. Doble clic para abrir perfil.</span>`;
+    `<span style="color:{PALETTE["400"]};"><b>${{conOrcid.size}}</b> autores con ORCID. Doble clic para abrir perfil.</span>`;
 }}
 function filtrarAutor(){{
   const q=document.getElementById('search-input').value.toLowerCase().trim();
@@ -2069,12 +2091,11 @@ network.on('stabilizationIterationsDone',function(){{network.fit();}});
     return html
 
 
-# ═══════════════════════════════════════════════════════
-# ── EXPORTAR EXCEL ────────────────────────────────────
-# ═══════════════════════════════════════════════════════
+# =======================================================
+# EXPORTAR EXCEL
+# =======================================================
 
 def estilo_header_xlsx(ws, fila, col_inicio, col_fin, titulo=None):
-    """Aplica estilo de encabezado a una fila."""
     fill_header = PatternFill("solid", fgColor="055BA6")
     font_header = Font(bold=True, color="FFFFFF", name="Arial", size=10)
     alin_center = Alignment(horizontal="center", vertical="center", wrap_text=True)
@@ -2085,7 +2106,6 @@ def estilo_header_xlsx(ws, fila, col_inicio, col_fin, titulo=None):
         cell.font = font_header
         cell.alignment = alin_center
 
-    # Bordes
     borde = Border(
         left=Side(style="thin", color="FFFFFF"),
         right=Side(style="thin", color="FFFFFF"),
@@ -2096,7 +2116,6 @@ def estilo_header_xlsx(ws, fila, col_inicio, col_fin, titulo=None):
 
 
 def estilo_fila_datos(ws, fila, col_inicio, col_fin, alternado=False):
-    """Aplica estilo a filas de datos."""
     fill_alt = PatternFill("solid", fgColor="E8F4FB")
     font_datos = Font(name="Arial", size=9, color="0a0a0a")
     alin = Alignment(vertical="center", wrap_text=True)
@@ -2115,7 +2134,6 @@ def estilo_fila_datos(ws, fila, col_inicio, col_fin, alternado=False):
 
 
 def agregar_titulo_hoja(ws, titulo, subtitulo=""):
-    """Agrega título vistoso al inicio de la hoja."""
     ws.row_dimensions[1].height = 30
     ws.row_dimensions[2].height = 18
     ws.merge_cells("A1:J1")
@@ -2135,32 +2153,32 @@ def agregar_titulo_hoja(ws, titulo, subtitulo=""):
 
 def generar_excel(df_art, resultados, periodo_str=""):
     wb = Workbook()
-    wb.remove(wb.active)  # Eliminar hoja vacía default
+    wb.remove(wb.active)
 
-    # ── Hoja 1: Resumen General ─────────────────────────
+    # Hoja 1: Resumen General
     ws1 = wb.create_sheet("Resumen General")
-    agregar_titulo_hoja(ws1, "📊 Resumen General del Análisis",
-                        f"Período: {periodo_str} · Total artículos: {len(df_art)}")
+    agregar_titulo_hoja(ws1, "Resumen General del Analisis",
+                        f"Periodo: {periodo_str} · Total articulos: {len(df_art)}")
 
     campos_meta = {
-        "Total de artículos": len(df_art),
-        "Números (issues) analizados": df_art["issue"].nunique() if "issue" in df_art.columns else "—",
-        "Autores únicos": resultados.get("total_autores", "—"),
-        "Con DOI": int(df_art["tiene_doi"].fillna(False).astype(bool).sum()) if "tiene_doi" in df_art.columns else "—",
-        "Con ORCID": int(df_art["tiene_orcid"].fillna(False).astype(bool).sum()) if "tiene_orcid" in df_art.columns else "—",
-        "Con Abstract": int(df_art["tiene_abstract"].fillna(False).astype(bool).sum()) if "tiene_abstract" in df_art.columns else "—",
-        "Con Keywords": int(df_art["tiene_keywords"].fillna(False).astype(bool).sum()) if "tiene_keywords" in df_art.columns else "—",
-        "Con Afiliación": int(df_art["tiene_afiliacion"].fillna(False).astype(bool).sum()) if "tiene_afiliacion" in df_art.columns else "—",
-        "Con País detectado": int(df_art["tiene_pais"].fillna(False).astype(bool).sum()) if "tiene_pais" in df_art.columns else "—",
+        "Total de articulos": len(df_art),
+        "Numeros (issues) analizados": df_art["issue"].nunique() if "issue" in df_art.columns else "-",
+        "Autores unicos": resultados.get("total_autores", "-"),
+        "Con DOI": int(df_art["tiene_doi"].fillna(False).astype(bool).sum()) if "tiene_doi" in df_art.columns else "-",
+        "Con ORCID": int(df_art["tiene_orcid"].fillna(False).astype(bool).sum()) if "tiene_orcid" in df_art.columns else "-",
+        "Con Abstract": int(df_art["tiene_abstract"].fillna(False).astype(bool).sum()) if "tiene_abstract" in df_art.columns else "-",
+        "Con Keywords": int(df_art["tiene_keywords"].fillna(False).astype(bool).sum()) if "tiene_keywords" in df_art.columns else "-",
+        "Con Afiliacion": int(df_art["tiene_afiliacion"].fillna(False).astype(bool).sum()) if "tiene_afiliacion" in df_art.columns else "-",
+        "Con Pais detectado": int(df_art["tiene_pais"].fillna(False).astype(bool).sum()) if "tiene_pais" in df_art.columns else "-",
         "Autores con ORCID en red": len(resultados.get("orcid_map", {})),
-        "Período analizado": periodo_str,
+        "Periodo analizado": periodo_str,
     }
 
     fila = 4
     estilo_header_xlsx(ws1, fila, 1, 3, "Resumen")
     ws1.cell(row=fila, column=1).value = "Indicador"
     ws1.cell(row=fila, column=2).value = "Valor"
-    ws1.cell(row=fila, column=3).value = "Descripción"
+    ws1.cell(row=fila, column=3).value = "Descripcion"
 
     for i, (k, v) in enumerate(campos_meta.items(), fila + 1):
         ws1.cell(row=i, column=1).value = k
@@ -2173,17 +2191,17 @@ def generar_excel(df_art, resultados, periodo_str=""):
     ws1.column_dimensions["B"].width = 20
     ws1.column_dimensions["C"].width = 40
 
-    # ── Hoja 2: Artículos Completos ─────────────────────
-    ws2 = wb.create_sheet("Artículos")
-    agregar_titulo_hoja(ws2, "📄 Listado Completo de Artículos",
-                        f"Exportado: {time.strftime('%d/%m/%Y %H:%M')} · {len(df_art)} artículos")
+    # Hoja 2: Articulos Completos
+    ws2 = wb.create_sheet("Articulos")
+    agregar_titulo_hoja(ws2, "Listado Completo de Articulos",
+                        f"Exportado: {time.strftime('%d/%m/%Y %H:%M')} · {len(df_art)} articulos")
 
     cols_art = [
-        ("Año", "anio_issue"), ("Vol.", "volumen_issue"), ("Núm.", "numero_issue"),
-        ("Número (Issue)", "issue"), ("Título del artículo", "articulo"),
+        ("Anio", "anio_issue"), ("Vol.", "volumen_issue"), ("Num.", "numero_issue"),
+        ("Numero (Issue)", "issue"), ("Titulo del articulo", "articulo"),
         ("Autores", "autores"), ("DOI", "doi"), ("Keywords", "keywords"),
         ("Resumen", "resumen"), ("Afiliaciones", "afiliaciones"),
-        ("Paginación", "paginacion"), ("Creative Commons", "creative_commons"),
+        ("Paginacion", "paginacion"), ("Creative Commons", "creative_commons"),
         ("Con DOI", "tiene_doi"), ("Con ORCID", "tiene_orcid"),
         ("Con Abstract", "tiene_abstract"), ("Con Keywords", "tiene_keywords"),
         ("URL", "articulo_url"),
@@ -2199,14 +2217,14 @@ def generar_excel(df_art, resultados, periodo_str=""):
         for j, (_, col) in enumerate(cols_art, 1):
             val = row.get(col, "")
             if isinstance(val, bool):
-                val = "Sí" if val else "No"
+                val = "Si" if val else "No"
             elif isinstance(val, (list, dict)):
                 val = str(val)[:200]
             ws2.cell(row=i, column=j).value = str(val)[:500] if val else ""
         estilo_fila_datos(ws2, i, 1, len(cols_art), alternado=(i % 2 == 0))
 
     for j, (label, _) in enumerate(cols_art, 1):
-        if "Título" in label or "Resumen" in label:
+        if "Titulo" in label or "Resumen" in label:
             ws2.column_dimensions[get_column_letter(j)].width = 45
         elif "Autores" in label or "Keywords" in label:
             ws2.column_dimensions[get_column_letter(j)].width = 30
@@ -2215,15 +2233,15 @@ def generar_excel(df_art, resultados, periodo_str=""):
 
     ws2.freeze_panes = "A6"
 
-    # ── Hoja 3: Estadísticas por Año ─────────────────────
-    ws3 = wb.create_sheet("Por Año")
-    agregar_titulo_hoja(ws3, "📅 Estadísticas por Año")
+    # Hoja 3: Por Anio
+    ws3 = wb.create_sheet("Por Anio")
+    agregar_titulo_hoja(ws3, "Estadisticas por Anio")
 
     figs_temp = resultados.get("figs_temporales", {})
     if "conteo_anio" in figs_temp:
         conteo_a = figs_temp["conteo_anio"]
         col_anio_k = [c for c in conteo_a.columns if "anio" in c][0]
-        headers_a = ["Año", "Artículos", "Con DOI", "Con ORCID", "Con Abstract", "Con Keywords", "Autores únicos"]
+        headers_a = ["Anio", "Articulos", "Con DOI", "Con ORCID", "Con Abstract", "Con Keywords", "Autores unicos"]
         fila = 4
         estilo_header_xlsx(ws3, fila, 1, len(headers_a))
         for j, h in enumerate(headers_a, 1):
@@ -2246,13 +2264,13 @@ def generar_excel(df_art, resultados, periodo_str=""):
         for j in range(1, len(headers_a) + 1):
             ws3.column_dimensions[get_column_letter(j)].width = 18
 
-    # ── Hoja 4: Estadísticas por Número ──────────────────
-    ws4 = wb.create_sheet("Por Número")
-    agregar_titulo_hoja(ws4, "Artículos por Número (Issue)")
+    # Hoja 4: Por Numero
+    ws4 = wb.create_sheet("Por Numero")
+    agregar_titulo_hoja(ws4, "Articulos por Numero (Issue)")
 
     conteo_iss = resultados.get("conteo_issues", pd.DataFrame())
     if not conteo_iss.empty:
-        headers_iss = ["Número (Issue)", "Artículos publicados"]
+        headers_iss = ["Numero (Issue)", "Articulos publicados"]
         fila = 4
         estilo_header_xlsx(ws4, fila, 1, len(headers_iss))
         for j, h in enumerate(headers_iss, 1):
@@ -2266,14 +2284,14 @@ def generar_excel(df_art, resultados, periodo_str=""):
         ws4.column_dimensions["A"].width = 50
         ws4.column_dimensions["B"].width = 22
 
-    # ── Hoja 5: Autores ───────────────────────────────────
+    # Hoja 5: Autores
     ws5 = wb.create_sheet("Autores")
-    agregar_titulo_hoja(ws5, "👥 Ranking de Autores por Producción")
+    agregar_titulo_hoja(ws5, "Ranking de Autores por Produccion")
 
     df_aut = resultados.get("df_autores_count", pd.DataFrame())
     orcid_map = resultados.get("orcid_map", {})
     if not df_aut.empty:
-        headers_aut = ["#", "Autor", "Artículos", "ORCID URL"]
+        headers_aut = ["#", "Autor", "Articulos", "ORCID URL"]
         fila = 4
         estilo_header_xlsx(ws5, fila, 1, len(headers_aut))
         for j, h in enumerate(headers_aut, 1):
@@ -2284,7 +2302,7 @@ def generar_excel(df_art, resultados, periodo_str=""):
             ws5.cell(row=i, column=2).value = str(row.get("autor", ""))
             ws5.cell(row=i, column=3).value = int(row.get("num_articulos", 0))
             orcid_url = orcid_map.get(row.get("autor", ""), "")
-            ws5.cell(row=i, column=4).value = str(orcid_url) if orcid_url else "—"
+            ws5.cell(row=i, column=4).value = str(orcid_url) if orcid_url else "-"
             if orcid_url:
                 ws5.cell(row=i, column=4).font = Font(
                     color="038C7F", underline="single", name="Arial", size=9)
@@ -2295,15 +2313,15 @@ def generar_excel(df_art, resultados, periodo_str=""):
         ws5.column_dimensions["C"].width = 12
         ws5.column_dimensions["D"].width = 45
 
-    # ── Hoja 6: Distribución Geográfica ──────────────────
-    ws6 = wb.create_sheet("Geografía")
-    agregar_titulo_hoja(ws6, "Distribución Geográfica de Autores")
+    # Hoja 6: Geografia
+    ws6 = wb.create_sheet("Geografia")
+    agregar_titulo_hoja(ws6, "Distribucion Geografica de Autores")
 
     df_mapa = resultados.get("df_mapa", pd.DataFrame())
     if not df_mapa.empty:
         paises_count = Counter(df_mapa["pais"].tolist())
         total_geo = sum(paises_count.values())
-        headers_geo = ["País", "Autores", "% del total", "Artículos únicos"]
+        headers_geo = ["Pais", "Autores", "% del total", "Articulos unicos"]
         fila = 4
         estilo_header_xlsx(ws6, fila, 1, len(headers_geo))
         for j, h in enumerate(headers_geo, 1):
@@ -2320,15 +2338,15 @@ def generar_excel(df_art, resultados, periodo_str=""):
         for j, w in zip(range(1, 5), [25, 12, 14, 18]):
             ws6.column_dimensions[get_column_letter(j)].width = w
 
-    # ── Hoja 7: Clusters Temáticos ───────────────────────
+    # Hoja 7: Clusters
     ws7 = wb.create_sheet("Clusters")
-    agregar_titulo_hoja(ws7, "Clusters Temáticos (KMeans + TF-IDF)",
-                        "Agrupación automática de artículos por similitud textual")
+    agregar_titulo_hoja(ws7, "Clusters Tematicos (KMeans + TF-IDF)",
+                        "Agrupacion automatica de articulos por similitud textual")
 
     conteo_cl = resultados.get("conteo_clusters", pd.DataFrame())
     top_terms_cl = resultados.get("top_terms_clusters", {})
     if not conteo_cl.empty:
-        headers_cl = ["Cluster", "Artículos", "Términos representativos (top 12)"]
+        headers_cl = ["Cluster", "Articulos", "Terminos representativos (top 12)"]
         fila = 4
         estilo_header_xlsx(ws7, fila, 1, len(headers_cl))
         for j, h in enumerate(headers_cl, 1):
@@ -2346,17 +2364,17 @@ def generar_excel(df_art, resultados, periodo_str=""):
         ws7.column_dimensions["B"].width = 12
         ws7.column_dimensions["C"].width = 60
 
-    # ── Hoja 8: Tópicos LDA ───────────────────────────────
-    ws8 = wb.create_sheet("Tópicos LDA")
-    agregar_titulo_hoja(ws8, "🏷️ Modelado de Tópicos (LDA)",
-                        "Distribución probabilística de temas · = tópico regional")
+    # Hoja 8: Topicos LDA
+    ws8 = wb.create_sheet("Topicos LDA")
+    agregar_titulo_hoja(ws8, "Modelado de Topicos (LDA)",
+                        "Distribucion probabilistica de temas · [R] = topico regional")
 
     top_terms_top = resultados.get("top_terms_topics", {})
     conteo_top = resultados.get("conteo_topicos", pd.DataFrame())
     topicos_reg = resultados.get("topicos_regionales", {})
 
     if top_terms_top:
-        headers_top = ["Tópico", "Artículos", "¿Regional?", "Términos principales (top 12)"]
+        headers_top = ["Topico", "Articulos", "Regional", "Terminos principales (top 12)"]
         fila = 4
         estilo_header_xlsx(ws8, fila, 1, len(headers_top))
         for j, h in enumerate(headers_top, 1):
@@ -2366,9 +2384,9 @@ def generar_excel(df_art, resultados, periodo_str=""):
             i = fila + t_idx + 1
             n_arts_top = conteo_top[conteo_top["topico"] == t_idx]["num_articulos"].values
             is_regional = t_idx in topicos_reg
-            ws8.cell(row=i, column=1).value = f"Tópico {t_idx}"
+            ws8.cell(row=i, column=1).value = f"Topico {t_idx}"
             ws8.cell(row=i, column=2).value = int(n_arts_top[0]) if len(n_arts_top) > 0 else 0
-            ws8.cell(row=i, column=3).value = "Sí" if is_regional else "No"
+            ws8.cell(row=i, column=3).value = "Si" if is_regional else "No"
             ws8.cell(row=i, column=4).value = ", ".join(terms_list[:12])
             estilo_fila_datos(ws8, i, 1, len(headers_top), alternado=(t_idx % 2 == 0))
             if is_regional:
@@ -2378,14 +2396,14 @@ def generar_excel(df_art, resultados, periodo_str=""):
         for j, w in zip(range(1, 5), [12, 12, 14, 60]):
             ws8.column_dimensions[get_column_letter(j)].width = w
 
-    # ── Hoja 9: Red de Coautoría ──────────────────────────
-    ws9 = wb.create_sheet("Red de Coautoría")
-    agregar_titulo_hoja(ws9, "🕸️ Métricas de Red de Coautoría",
-                        "Nodos con ORCID, País y Afiliación detectados automáticamente")
+    # Hoja 9: Red de Coautoria
+    ws9 = wb.create_sheet("Red de Coautoria")
+    agregar_titulo_hoja(ws9, "Metricas de Red de Coautoria",
+                        "Nodos con ORCID, Pais y Afiliacion detectados automaticamente")
 
     G = resultados.get("grafo_G", nx.Graph())
     if G.number_of_nodes() > 0:
-        headers_red = ["Autor", "Artículos", "Tópico", "Co-autores", "País", "Afiliación", "ORCID URL"]
+        headers_red = ["Autor", "Articulos", "Topico", "Co-autores", "Pais", "Afiliacion", "ORCID URL"]
         fila = 4
         estilo_header_xlsx(ws9, fila, 1, len(headers_red))
         for j, h in enumerate(headers_red, 1):
@@ -2397,11 +2415,11 @@ def generar_excel(df_art, resultados, periodo_str=""):
             vals = [
                 nodo,
                 G.nodes[nodo].get("articulos", 0),
-                G.nodes[nodo].get("topico", "—"),
+                G.nodes[nodo].get("topico", "-"),
                 G.degree(nodo),
                 G.nodes[nodo].get("pais", ""),
                 G.nodes[nodo].get("afiliacion", "")[:100],
-                orcid_url or "—",
+                orcid_url or "-",
             ]
             for j, val in enumerate(vals, 1):
                 ws9.cell(row=i, column=j).value = val
@@ -2413,17 +2431,17 @@ def generar_excel(df_art, resultados, periodo_str=""):
         for j, w in zip(range(1, 8), [30, 10, 10, 12, 20, 40, 45]):
             ws9.column_dimensions[get_column_letter(j)].width = w
 
-    # ── Hoja 10: Metadatos por Artículo ──────────────────
+    # Hoja 10: Metadatos por Articulo
     ws10 = wb.create_sheet("Metadatos")
-    agregar_titulo_hoja(ws10, "🔖 Cobertura de Metadatos por Artículo")
+    agregar_titulo_hoja(ws10, "Cobertura de Metadatos por Articulo")
 
     campos_bool = [
         ("DOI", "tiene_doi"), ("ORCID", "tiene_orcid"), ("Abstract", "tiene_abstract"),
-        ("Keywords", "tiene_keywords"), ("Afiliación", "tiene_afiliacion"),
-        ("País", "tiene_pais"), ("Creative Commons", "tiene_cc"),
-        ("Paginación", "tiene_paginacion"), ("Copyright", "tiene_copyright"),
+        ("Keywords", "tiene_keywords"), ("Afiliacion", "tiene_afiliacion"),
+        ("Pais", "tiene_pais"), ("Creative Commons", "tiene_cc"),
+        ("Paginacion", "tiene_paginacion"), ("Copyright", "tiene_copyright"),
     ]
-    cols_meta = [("Título", "articulo"), ("Año", "anio_issue"), ("Autores", "autores")] + \
+    cols_meta = [("Titulo", "articulo"), ("Anio", "anio_issue"), ("Autores", "autores")] + \
                 [(label, col) for label, col in campos_bool if col in df_art.columns]
 
     fila = 4
@@ -2435,23 +2453,22 @@ def generar_excel(df_art, resultados, periodo_str=""):
         for j, (_, col) in enumerate(cols_meta, 1):
             val = row.get(col, "")
             if isinstance(val, bool):
-                val = "Sí" if val else "No"
+                val = "Si" if val else "No"
             ws10.cell(row=i, column=j).value = str(val)[:200] if val else ""
         estilo_fila_datos(ws10, i, 1, len(cols_meta), alternado=(i % 2 == 0))
 
     for j in range(1, len(cols_meta) + 1):
         ws10.column_dimensions[get_column_letter(j)].width = 20 if j <= 3 else 14
 
-    # Guardar
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
     return buf.read()
 
 
-# ═══════════════════════════════════════════════════════
-# ── PDF CON FIGURAS Y EXPLICACIONES ──────────────────
-# ═══════════════════════════════════════════════════════
+# =======================================================
+# PDF CON FIGURAS Y EXPLICACIONES
+# =======================================================
 
 def generar_pdf(url_revista, df_art, resultados, periodo_str=""):
     buf = io.BytesIO()
@@ -2459,7 +2476,7 @@ def generar_pdf(url_revista, df_art, resultados, periodo_str=""):
         buf, pagesize=A4,
         rightMargin=1.8*rcm, leftMargin=1.8*rcm,
         topMargin=2*rcm, bottomMargin=2*rcm,
-        title="Análisis de Revista OJS v5",
+        title="Analisis de Revista OJS v5",
     )
     styles = getSampleStyleSheet()
 
@@ -2483,10 +2500,6 @@ def generar_pdf(url_revista, df_art, resultados, periodo_str=""):
         spaceAfter=5, fontName="Helvetica-Bold")
     body_style = ParagraphStyle("Body", parent=styles["Normal"],
         fontSize=9, leading=14, alignment=TA_JUSTIFY, textColor=c_negro)
-    explain_style = ParagraphStyle("Exp", parent=styles["Normal"],
-        fontSize=9, leading=14, textColor=c_negro,
-        backColor=colors.HexColor("#E8F4FB"),
-        borderPadding=8, leftIndent=8, rightIndent=8)
     center_style = ParagraphStyle("Center", parent=styles["Normal"],
         alignment=TA_CENTER, fontSize=8, textColor=c_gris)
     caption_style = ParagraphStyle("Cap", parent=styles["Normal"],
@@ -2512,10 +2525,10 @@ def generar_pdf(url_revista, df_art, resultados, periodo_str=""):
 
     story = []
 
-    # ── PORTADA ──────────────────────────────────────────
+    # PORTADA
     story.append(Spacer(1, 0.6*inch))
-    story.append(Paragraph("🔵 Análisis de Revista OJS", title_style))
-    story.append(Paragraph("Informe de figuras y análisis de contenido · v5.0", subtitle_style))
+    story.append(Paragraph("Analisis de Revista OJS", title_style))
+    story.append(Paragraph("Informe de figuras y analisis de contenido · v5.0", subtitle_style))
     story.append(Spacer(1, 0.15*inch))
     story.append(HRFlowable(width="100%", thickness=3, color=c_azul_medio))
     story.append(Spacer(1, 0.2*inch))
@@ -2523,13 +2536,13 @@ def generar_pdf(url_revista, df_art, resultados, periodo_str=""):
     col_anio = "anio_issue" if "anio_issue" in df_art.columns else "anio_pub"
     anios = sorted([a for a in df_art[col_anio].dropna().unique()
                     if str(a).strip().isdigit()]) if col_anio in df_art.columns else []
-    anio_str = periodo_str or (f"{anios[0]}–{anios[-1]}" if len(anios) > 1 else (anios[0] if anios else "—"))
+    anio_str = periodo_str or (f"{anios[0]}-{anios[-1]}" if len(anios) > 1 else (anios[0] if anios else "-"))
 
     meta_data = [
         ["Revista analizada:", Paragraph(url_revista[:80], body_style)],
-        ["Período analizado:", Paragraph(anio_str, body_style)],
-        ["Total de artículos:", str(len(df_art))],
-        ["Números analizados:", str(df_art["issue"].nunique())],
+        ["Periodo analizado:", Paragraph(anio_str, body_style)],
+        ["Total de articulos:", str(len(df_art))],
+        ["Numeros analizados:", str(df_art["issue"].nunique())],
         ["Fecha del informe:", time.strftime("%d de %B de %Y, %H:%M")],
     ]
     t_meta = Table(meta_data, colWidths=[4.5*rcm, 13.1*rcm])
@@ -2548,28 +2561,28 @@ def generar_pdf(url_revista, df_art, resultados, periodo_str=""):
     story.append(t_meta)
     story.append(PageBreak())
 
-    # ── 1. ARTÍCULOS POR NÚMERO ───────────────────────────
-    story.append(section_header("1. Artículos por Número (Issue)"))
+    # 1. ARTICULOS POR NUMERO
+    story.append(section_header("1. Articulos por Numero (Issue)"))
     story.append(Spacer(1, 0.1*inch))
     story.append(Paragraph(
-        "La siguiente gráfica muestra la cantidad de artículos publicados en cada número de la revista. "
-        "Permite identificar si la producción es homogénea entre números o si existen ediciones con "
-        "mayor o menor carga de contenido. Números con muy pocos artículos pueden indicar ediciones "
-        "especiales, suplementos o períodos de baja producción.",
+        "La siguiente grafica muestra la cantidad de articulos publicados en cada numero de la revista. "
+        "Permite identificar si la produccion es homogenea entre numeros o si existen ediciones con "
+        "mayor o menor carga de contenido. Numeros con muy pocos articulos pueden indicar ediciones "
+        "especiales, suplementos o periodos de baja produccion.",
         body_style))
     story.append(Spacer(1, 0.1*inch))
     story.append(RLImage(io.BytesIO(resultados["fig_issues_bytes"]), width=17*rcm, height=5.5*rcm))
-    story.append(Paragraph("Fig. 1 — Distribución de artículos por número de la revista.", caption_style))
+    story.append(Paragraph("Fig. 1 - Distribucion de articulos por numero de la revista.", caption_style))
     story.append(PageBreak())
 
-    # ── 2. ANÁLISIS TEMPORAL ─────────────────────────────
-    story.append(section_header("2. Evolución Temporal de la Producción"))
+    # 2. ANALISIS TEMPORAL
+    story.append(section_header("2. Evolucion Temporal de la Produccion"))
     story.append(Spacer(1, 0.1*inch))
     story.append(Paragraph(
-        "El análisis temporal permite observar cómo ha variado la producción científica de la revista "
+        "El analisis temporal permite observar como ha variado la produccion cientifica de la revista "
         "a lo largo del tiempo. Se identifican tendencias de crecimiento, estancamiento o declive, "
-        "así como el ritmo de adopción de estándares de metadatos (DOI, ORCID, resúmenes, palabras clave). "
-        "Un aumento en la cobertura de DOI y ORCID refleja la modernización editorial de la revista.",
+        "asi como el ritmo de adopcion de estandares de metadatos (DOI, ORCID, resumenes, palabras clave). "
+        "Un aumento en la cobertura de DOI y ORCID refleja la modernizacion editorial de la revista.",
         body_style))
     story.append(Spacer(1, 0.1*inch))
 
@@ -2579,18 +2592,16 @@ def generar_pdf(url_revista, df_art, resultados, periodo_str=""):
         col_anio_k = [c for c in conteo_a.columns if "anio" in c][0]
 
         fig_temp_mpl, axes = plt.subplots(1, 2, figsize=(14, 4))
-        # Barras por año
         axes[0].bar(conteo_a[col_anio_k].astype(str), conteo_a["articulos"],
                     color=PALETTE["600"], edgecolor="white")
-        axes[0].set_title("Artículos por año", fontweight="bold", color="#0a0a0a")
-        axes[0].set_xlabel("Año")
-        axes[0].set_ylabel("Artículos")
+        axes[0].set_title("Articulos por año", fontweight="bold", color="#0a0a0a")
+        axes[0].set_xlabel("Anio")
+        axes[0].set_ylabel("Articulos")
         axes[0].tick_params(axis="x", rotation=45)
         axes[0].set_facecolor(PALETTE["50"])
         axes[0].spines["top"].set_visible(False)
         axes[0].spines["right"].set_visible(False)
 
-        # Líneas de evolución
         for col_k, label, color in [
             ("con_doi", "Con DOI", PALETTE["600"]),
             ("con_orcid", "Con ORCID", PALETTE["teal"]),
@@ -2599,9 +2610,9 @@ def generar_pdf(url_revista, df_art, resultados, periodo_str=""):
             if col_k in conteo_a.columns:
                 axes[1].plot(conteo_a[col_anio_k].astype(str), conteo_a[col_k],
                              label=label, color=color, marker="o", linewidth=2)
-        axes[1].set_title("Evolución de metadatos", fontweight="bold", color="#0a0a0a")
-        axes[1].set_xlabel("Año")
-        axes[1].set_ylabel("Artículos")
+        axes[1].set_title("Evolucion de metadatos", fontweight="bold", color="#0a0a0a")
+        axes[1].set_xlabel("Anio")
+        axes[1].set_ylabel("Articulos")
         axes[1].legend(fontsize=8)
         axes[1].tick_params(axis="x", rotation=45)
         axes[1].set_facecolor(PALETTE["50"])
@@ -2612,68 +2623,60 @@ def generar_pdf(url_revista, df_art, resultados, periodo_str=""):
         story.append(RLImage(io.BytesIO(fig_to_bytes(fig_temp_mpl)), width=17*rcm, height=7*rcm))
         plt.close(fig_temp_mpl)
         story.append(Paragraph(
-            "Fig. 2 — Izquierda: producción por año. Derecha: adopción de metadatos estructurados.",
+            "Fig. 2 - Izquierda: produccion por anio. Derecha: adopcion de metadatos estructurados.",
             caption_style))
     story.append(PageBreak())
 
-    # ── 3. METADATOS ──────────────────────────────────────
+    # 3. METADATOS
     story.append(section_header("3. Presencia de Metadatos Estructurados"))
     story.append(Spacer(1, 0.1*inch))
     story.append(Paragraph(
-        "Los metadatos estructurados son esenciales para la visibilidad, indexación y citación de "
-        "los artículos en bases de datos internacionales. El DOI (Digital Object Identifier) garantiza "
-        "un enlace permanente; el ORCID vincula el trabajo a un perfil de investigador único; "
-        "las palabras clave y resúmenes facilitan la recuperación en motores de búsqueda académicos. "
-        "Una cobertura superior al 70% se considera buena práctica editorial.",
+        "Los metadatos estructurados son esenciales para la visibilidad, indexacion y citacion de "
+        "los articulos en bases de datos internacionales. El DOI (Digital Object Identifier) garantiza "
+        "un enlace permanente; el ORCID vincula el trabajo a un perfil de investigador unico; "
+        "las palabras clave y resumenes facilitan la recuperacion en motores de busqueda academicos. "
+        "Una cobertura superior al 70% se considera buena practica editorial.",
         body_style))
     story.append(Spacer(1, 0.1*inch))
     story.append(RLImage(io.BytesIO(resultados["fig_metadatos"]), width=17*rcm, height=8*rcm))
     story.append(Paragraph(
-        "Fig. 3 — Porcentaje de artículos con cada tipo de metadato. La línea vertical marca el 50%.",
+        "Fig. 3 - Porcentaje de articulos con cada tipo de metadato. La linea vertical marca el 50%.",
         caption_style))
     story.append(PageBreak())
 
-    # ── 4. AUTORES ────────────────────────────────────────
-    story.append(section_header("4. Análisis de Autores"))
+    # 4. AUTORES
+    story.append(section_header("4. Analisis de Autores"))
     story.append(Spacer(1, 0.1*inch))
     story.append(Paragraph(
-        "El análisis de autoría identifica a los investigadores más productivos en la revista. "
-        "Autores con múltiples publicaciones son considerados autores nucleares o recurrentes, "
-        "lo que puede indicar una línea editorial temática consistente. La detección de ORCID "
+        "El analisis de autoria identifica a los investigadores mas productivos en la revista. "
+        "Autores con multiples publicaciones son considerados autores nucleares o recurrentes, "
+        "lo que puede indicar una linea editorial tematica consistente. La deteccion de ORCID "
         "permite vincular a estos autores con sus perfiles institucionales y otras publicaciones.",
         body_style))
     story.append(Spacer(1, 0.1*inch))
     story.append(RLImage(io.BytesIO(resultados["fig_autores"]), width=17*rcm, height=7*rcm))
     story.append(Paragraph(
-        "Fig. 4 — Top 20 autores con mayor número de artículos publicados en el período analizado.",
+        "Fig. 4 - Top 20 autores con mayor numero de articulos publicados en el periodo analizado.",
         caption_style))
     story.append(PageBreak())
 
-    # ── 5. MAPA GEOGRÁFICO ────────────────────────────────
-    story.append(section_header("5. Distribución Geográfica de Autores"))
+    # 5. MAPA GEOGRAFICO
+    story.append(section_header("5. Distribucion Geografica de Autores"))
     story.append(Spacer(1, 0.1*inch))
     story.append(Paragraph(
-        "La distribución geográfica de autores refleja el alcance y la internacionalización de la "
+        "La distribucion geografica de autores refleja el alcance y la internacionalizacion de la "
         "revista. Se detecta a partir de las afiliaciones institucionales declaradas en los metadatos "
-        "de cada artículo. Revistas con mayor diversidad geográfica suelen tener mayor impacto y "
-        "visibilidad internacional. Las líneas en el mapa interactivo representan colaboraciones "
-        "internacionales (co-autorías entre autores de distintos países en el mismo artículo).",
+        "de cada articulo. Revistas con mayor diversidad geografica suelen tener mayor impacto y "
+        "visibilidad internacional. Las lineas en el mapa interactivo representan colaboraciones "
+        "internacionales (co-autorias entre autores de distintos paises en el mismo articulo).",
         body_style))
     story.append(Spacer(1, 0.1*inch))
-    story.append(Paragraph(
-        "⚠ Nota: El mapa interactivo con burbujas y conexiones está disponible en la aplicación web. "
-        "Este informe muestra la tabla resumen de países detectados.",
-        Paragraph("", body_style).__class__(
-            "⚠ Nota: El mapa interactivo está disponible en la aplicación web.",
-            ParagraphStyle("note", fontSize=8.5, textColor=c_azul_medio, fontName="Helvetica-Oblique")
-        ) if False else body_style))
 
     df_mapa = resultados.get("df_mapa", pd.DataFrame())
     if not df_mapa.empty:
         paises_count = Counter(df_mapa["pais"].tolist())
         total_geo = sum(paises_count.values())
 
-        # Gráfica matplotlib de países
         top_paises = paises_count.most_common(15)
         paises_names = [p[0] for p in top_paises]
         paises_vals = [p[1] for p in top_paises]
@@ -2681,7 +2684,7 @@ def generar_pdf(url_revista, df_art, resultados, periodo_str=""):
         colors_p = [PALETTE["600"] if i == 0 else PALETTE["300"] if i < 3 else PALETTE["100"]
                     for i in range(len(paises_names))]
         ax_p.barh(paises_names, paises_vals, color=colors_p, edgecolor="white")
-        ax_p.set_title("Top países por número de autores", fontweight="bold", color="#0a0a0a")
+        ax_p.set_title("Top paises por numero de autores", fontweight="bold", color="#0a0a0a")
         ax_p.set_xlabel("Autores")
         ax_p.invert_yaxis()
         ax_p.set_facecolor(PALETTE["50"])
@@ -2692,33 +2695,27 @@ def generar_pdf(url_revista, df_art, resultados, periodo_str=""):
         plt.tight_layout()
         story.append(RLImage(io.BytesIO(fig_to_bytes(fig_p)), width=17*rcm, height=7*rcm))
         plt.close(fig_p)
-        story.append(Paragraph("Fig. 5 — Países con mayor presencia de autores.", caption_style))
+        story.append(Paragraph("Fig. 5 - Paises con mayor presencia de autores.", caption_style))
     story.append(PageBreak())
 
-    # ── 6. CLUSTERS TEMÁTICOS ─────────────────────────────
-    story.append(section_header("6. Clustering Temático (KMeans + TF-IDF)"))
+    # 6. CLUSTERS TEMATICOS
+    story.append(section_header("6. Clustering Tematico (KMeans + TF-IDF)"))
     story.append(Spacer(1, 0.1*inch))
 
-    # Explicación detallada
     explain_text = """
-<b>¿Cómo se obtienen los clusters?</b><br/><br/>
+<b>Como se obtienen los clusters</b><br/><br/>
 
-<b>Paso 1 — Matriz TF-IDF:</b> El texto de cada artículo (título + resumen + palabras clave) se convierte
-en una representación numérica usando TF-IDF (Term Frequency–Inverse Document Frequency):<br/>
-<i>TF-IDF(término, documento) = TF × IDF</i><br/>
-Donde <b>TF</b> mide cuánto aparece un término en el artículo y <b>IDF</b> mide cuán raro es en toda la
-colección. Las palabras muy comunes (como "investigación") pierden peso; las específicas
-(como "sismología") ganan importancia. Se filtran palabras académicas genéricas (artículo, libro,
-estudio, etc.) para que los términos sean más informativos.<br/><br/>
+<b>Paso 1 - Matriz TF-IDF:</b> El texto de cada articulo (titulo + resumen + palabras clave) se convierte
+en una representacion numerica usando TF-IDF (Term Frequency-Inverse Document Frequency).<br/>
+Las palabras muy comunes (como "investigacion") pierden peso; las especificas
+(como "sismologia") ganan importancia. Se filtran palabras academicas genericas para que los terminos sean mas informativos.<br/><br/>
 
-<b>Paso 2 — K-Means:</b> Es un algoritmo de aprendizaje no supervisado que agrupa artículos por
-cercanía en el espacio TF-IDF. Cada artículo se asigna al centroide (punto central) más cercano
-usando distancia euclídea. Los grupos resultantes son <b>clusters temáticos</b>, donde los artículos
-dentro de cada cluster son más similares entre sí que con los de otros clusters.<br/><br/>
+<b>Paso 2 - K-Means:</b> Es un algoritmo de aprendizaje no supervisado que agrupa articulos por
+cercania en el espacio TF-IDF. Cada articulo se asigna al centroide (punto central) mas cercano
+usando distancia euclidea. Los grupos resultantes son clusters tematicos.<br/><br/>
 
-<b>Paso 3 — PCA:</b> Como la matriz TF-IDF tiene miles de dimensiones, se usa el Análisis de
-Componentes Principales (PCA) para reducirla a 2 dimensiones (X,Y) y poder visualizar los clusters
-en un plano 2D.
+<b>Paso 3 - PCA:</b> Como la matriz TF-IDF tiene miles de dimensiones, se usa el Analisis de
+Componentes Principales (PCA) para reducirla a 2 dimensiones (X,Y) y poder visualizar los clusters.
 """
     story.append(Paragraph(explain_text,
         ParagraphStyle("explain", parent=styles["Normal"],
@@ -2734,28 +2731,27 @@ en un plano 2D.
     )
     story.append(img_row)
     story.append(Paragraph(
-        "Fig. 6a — Artículos por cluster temático. Fig. 6b — Proyección PCA: cada punto es un artículo.",
+        "Fig. 6a - Articulos por cluster tematico. Fig. 6b - Proyeccion PCA: cada punto es un articulo.",
         caption_style))
     story.append(PageBreak())
 
-    # ── 7. TÓPICOS LDA ────────────────────────────────────
-    story.append(section_header("7. Modelado de Tópicos (LDA)"))
+    # 7. TOPICOS LDA
+    story.append(section_header("7. Modelado de Topicos (LDA)"))
     story.append(Spacer(1, 0.1*inch))
 
     explain_lda = """
-<b>¿Cómo funciona LDA?</b><br/><br/>
+<b>Como funciona LDA</b><br/><br/>
 
-A diferencia de los clusters (donde cada artículo pertenece a un solo grupo), LDA
-(Latent Dirichlet Allocation) es un <b>modelo probabilístico</b> que asume:<br/>
-• Cada artículo es una mezcla de tópicos (ej: 70% "Geofísica" + 30% "Historia").<br/>
-• Cada tópico es una distribución de palabras con distintas probabilidades.<br/><br/>
+A diferencia de los clusters (donde cada articulo pertenece a un solo grupo), LDA
+(Latent Dirichlet Allocation) es un modelo probabilistico que asume:<br/>
+- Cada articulo es una mezcla de topicos (ej: 70% "Geofisica" + 30% "Historia").<br/>
+- Cada topico es una distribucion de palabras con distintas probabilidades.<br/><br/>
 
-El modelo detecta automáticamente estas estructuras latentes al observar qué palabras
-aparecen juntas en los mismos documentos. A cada artículo se le asigna el tópico con
-mayor probabilidad (<i>topic_values.argmax()</i>).<br/><br/>
+El modelo detecta automaticamente estas estructuras latentes al observar que palabras
+aparecen juntas en los mismos documentos.<br/><br/>
 
-<b>Tópico regional:</b> Se detecta automáticamente cuando un tópico contiene 2 o más términos
-geográficos o de escala territorial (país, región, municipal, zona, comunidad, etc.).
+<b>Topico regional:</b> Se detecta automaticamente cuando un topico contiene 2 o mas terminos
+geograficos o de escala territorial (pais, region, municipal, zona, comunidad, etc.).
 """
     story.append(Paragraph(explain_lda,
         ParagraphStyle("explain_lda", parent=styles["Normal"],
@@ -2765,7 +2761,7 @@ geográficos o de escala territorial (país, región, municipal, zona, comunidad
 
     story.append(RLImage(io.BytesIO(resultados["fig_topicos_issue"]), width=17*rcm, height=6.5*rcm))
     story.append(Paragraph(
-        "Fig. 7 — Distribución de tópicos por número de la revista. 🌍 = tópico con orientación regional.",
+        "Fig. 7 - Distribucion de topicos por numero de la revista. [R] = topico con orientacion regional.",
         caption_style))
     story.append(Spacer(1, 0.1*inch))
 
@@ -2780,19 +2776,19 @@ geográficos o de escala territorial (país, región, municipal, zona, comunidad
                 row_imgs.append(Spacer(1, 1))
         story.append(Table([row_imgs], colWidths=[8.8*rcm, 8.8*rcm]))
     story.append(Paragraph(
-        "Fig. 7b — Nubes de palabras por tópico. Las palabras más grandes tienen mayor peso en el tópico.",
+        "Fig. 7b - Nubes de palabras por topico. Las palabras mas grandes tienen mayor peso en el topico.",
         caption_style))
     story.append(PageBreak())
 
-    # ── 8. RED DE COAUTORÍA ───────────────────────────────
-    story.append(section_header("8. Red de Coautoría"))
+    # 8. RED DE COAUTORIA
+    story.append(section_header("8. Red de Coautoria"))
     story.append(Spacer(1, 0.1*inch))
     story.append(Paragraph(
-        "La red de coautoría representa las relaciones de colaboración entre autores. Cada nodo es "
-        "un autor y cada arista conecta a dos autores que han publicado juntos. El tamaño del nodo "
-        "refleja el número de artículos del autor. El color indica el tópico dominante de su producción. "
-        "Los nodos con el ícono 🔗 tienen ORCID registrado, lo que permite verificar su identidad "
-        "y producción en plataformas internacionales. En la aplicación web puedes hacer doble clic "
+        "La red de coautoria representa las relaciones de colaboracion entre autores. Cada nodo es "
+        "un autor y cada arista conecta a dos autores que han publicado juntos. El tamano del nodo "
+        "refleja el numero de articulos del autor. El color indica el topico dominante de su produccion. "
+        "Los nodos marcados con [O] tienen ORCID registrado, lo que permite verificar su identidad "
+        "y produccion en plataformas internacionales. En la aplicacion web puedes hacer doble clic "
         "sobre cualquier nodo con ORCID para abrir su perfil directamente.",
         body_style))
     story.append(Spacer(1, 0.1*inch))
@@ -2802,14 +2798,14 @@ geográficos o de escala territorial (país, región, municipal, zona, comunidad
     metricas_red = [
         ["Nodos (autores en red)", str(G.number_of_nodes())],
         ["Aristas (colaboraciones)", str(G.number_of_edges())],
-        ["Densidad de la red", f"{nx.density(G):.4f}" if G.number_of_nodes() > 1 else "—"],
-        ["Componentes conectados", str(nx.number_connected_components(G)) if G.number_of_nodes() > 0 else "—"],
+        ["Densidad de la red", f"{nx.density(G):.4f}" if G.number_of_nodes() > 1 else "-"],
+        ["Componentes conectados", str(nx.number_connected_components(G)) if G.number_of_nodes() > 0 else "-"],
         ["Autores con ORCID", str(con_orcid)],
-        ["Países en la red", str(len(set(G.nodes[n].get("pais","") for n in G.nodes() if G.nodes[n].get("pais"))))],
+        ["Paises en la red", str(len(set(G.nodes[n].get("pais","") for n in G.nodes() if G.nodes[n].get("pais"))))],
     ]
 
     t_red_pdf = Table(
-        [["Métrica", "Valor"]] + metricas_red,
+        [["Metrica", "Valor"]] + metricas_red,
         colWidths=[9*rcm, 8.6*rcm]
     )
     t_red_pdf.setStyle(TableStyle([
@@ -2832,12 +2828,12 @@ geográficos o de escala territorial (país, región, municipal, zona, comunidad
     if resultados["fig_red"]:
         story.append(RLImage(io.BytesIO(resultados["fig_red"]), width=17*rcm, height=13*rcm))
         story.append(Paragraph(
-            "Fig. 8 — Red de coautoría. Tamaño = número de artículos. Color = tópico dominante. "
-            "Solo se etiquetan autores con 2 o más artículos.",
+            "Fig. 8 - Red de coautoria. Tamano = numero de articulos. Color = topico dominante. "
+            "Solo se etiquetan autores con 2 o mas articulos.",
             caption_style))
     else:
         story.append(Paragraph(
-            "No se encontraron pares de coautoría en el período seleccionado.", body_style))
+            "No se encontraron pares de coautoria en el periodo seleccionado.", body_style))
 
     story.append(Spacer(1, 0.3*inch))
     story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#BCD9F0")))
@@ -2853,25 +2849,25 @@ geográficos o de escala territorial (país, región, municipal, zona, comunidad
     return buf.read()
 
 
-# ═══════════════════════════════════════════════════════
+# =======================================================
 # SIDEBAR
-# ═══════════════════════════════════════════════════════
+# =======================================================
 with st.sidebar:
     st.markdown(f"""
     <div style="background:linear-gradient(135deg,{PALETTE['800']},{PALETTE['700']});
                 padding:1rem;border-radius:10px;border:1px solid {PALETTE['500']}40;
                 margin-bottom:1rem;">
-      <h3 style="color:{PALETTE['400']};margin:0;font-size:1rem;">⚙️ Configuración</h3>
+      <h3 style="color:{PALETTE['400']};margin:0;font-size:1rem;">Configuracion</h3>
     </div>
     """, unsafe_allow_html=True)
 
     url_input = st.text_input(
-        "🔗 URL del archivo de números",
+        "URL del archivo de numeros",
         placeholder="https://ejemplo.com/index.php/revista/issue/archive",
     )
-    st.markdown("##### Parámetros de análisis")
+    st.markdown("##### Parametros de analisis")
     n_clusters = st.slider("Clusters KMeans", 2, 10, 4)
-    n_topics   = st.slider("Tópicos LDA", 2, 10, 5)
+    n_topics   = st.slider("Topicos LDA", 2, 10, 5)
 
     st.markdown("---")
     st.markdown(f"""
@@ -2880,11 +2876,11 @@ with st.sidebar:
       <p style="color:{PALETTE['300']};font-size:0.8rem;margin:0;font-weight:600;">Flujo de trabajo</p>
       <ol style="color:{PALETTE['200']};font-size:0.78rem;padding-left:1rem;margin-top:0.5rem;">
         <li>Pega la URL del archivo de la revista</li>
-        <li><b>Cargar revista</b> → visualiza números</li>
-        <li>Filtra y selecciona cuántos analizar</li>
-        <li><b>Extraer artículos</b> (metadatos completos)</li>
-        <li>Usa el <b>selector de período</b> dinámico</li>
-        <li><b>Ejecutar análisis</b> en el período elegido</li>
+        <li>Cargar revista para visualizar numeros</li>
+        <li>Filtra y selecciona cuantos analizar</li>
+        <li>Extraer articulos (metadatos completos)</li>
+        <li>Usa el selector de periodo dinamico</li>
+        <li>Ejecutar analisis en el periodo elegido</li>
         <li>Explora el mapa, la red y descarga PDF + Excel</li>
       </ol>
     </div>
@@ -2892,9 +2888,9 @@ with st.sidebar:
     st.caption(f"OJS 2.x / 3.x · v5.0 · Paleta azul")
 
 
-# ═══════════════════════════════════════════════════════
+# =======================================================
 # STATE INIT
-# ═══════════════════════════════════════════════════════
+# =======================================================
 for key in ["df_issues", "df_articulos", "resultados", "url_usada"]:
     if key not in st.session_state:
         st.session_state[key] = None if key != "url_usada" else ""
@@ -2902,57 +2898,57 @@ for key in ["df_issues", "df_articulos", "resultados", "url_usada"]:
 stop_words = load_stopwords()
 
 
-# ═══════════════════════════════════════════════════════
+# =======================================================
 # PASO 1: CARGAR ISSUES
-# ═══════════════════════════════════════════════════════
+# =======================================================
 cargar_btn = st.button(
-    "🔍 Cargar revista (todos los números)", type="primary",
+    "Cargar revista (todos los numeros)", type="primary",
     use_container_width=True, disabled=not url_input.strip()
 )
 
 if cargar_btn and url_input.strip():
-    with st.spinner("Recorriendo todas las páginas de la revista…"):
+    with st.spinner("Recorriendo todas las paginas de la revista..."):
         df_issues, err = extraer_issues_todas_paginas(url_input.strip())
     if err:
-        st.error(f"❌ Error: {err}")
+        st.error(f"Error: {err}")
     elif df_issues.empty:
-        st.warning("⚠️ No se encontraron números. Verifica la URL.")
+        st.warning("No se encontraron numeros. Verifica la URL.")
     else:
         st.session_state.df_issues = df_issues
         st.session_state.url_usada = url_input.strip()
         st.session_state.df_articulos = None
         st.session_state.resultados = None
-        st.success(f"Se encontraron **{len(df_issues)}** números.")
+        st.success(f"Se encontraron **{len(df_issues)}** numeros.")
 
 
-# ═══════════════════════════════════════════════════════
+# =======================================================
 # PASO 2: VISUALIZAR Y FILTRAR ISSUES
-# ═══════════════════════════════════════════════════════
+# =======================================================
 if st.session_state.df_issues is not None:
     df_issues = st.session_state.df_issues
-    st.markdown('<div class="section-header"> Números disponibles en la revista</div>',
+    st.markdown('<div class="section-header">Numeros disponibles en la revista</div>',
                 unsafe_allow_html=True)
 
     col_m1, col_m2, col_m3, col_m4 = st.columns(4)
     metricas_issues = [
-        (len(df_issues), "Total de números", ""),
-        (df_issues["anio"].replace("", pd.NA).dropna().nunique(), "Años distintos", "accent"),
-        (df_issues["volumen"].replace("", pd.NA).dropna().nunique(), "Volúmenes", "teal"),
-        (df_issues["tipo"].value_counts().index[0] if len(df_issues) > 0 else "—", "Tipo dominante", "dark"),
+        (len(df_issues), "Total de numeros", ""),
+        (df_issues["anio"].replace("", pd.NA).dropna().nunique(), "Anos distintos", "accent"),
+        (df_issues["volumen"].replace("", pd.NA).dropna().nunique(), "Volumenes", "teal"),
+        (df_issues["tipo"].value_counts().index[0] if len(df_issues) > 0 else "-", "Tipo dominante", "dark"),
     ]
     for col, (val, label, cls) in zip([col_m1, col_m2, col_m3, col_m4], metricas_issues):
         with col:
             st.markdown(f'<div class="metric-card {cls}"><h3>{val}</h3><p>{label}</p></div>',
                         unsafe_allow_html=True)
 
-    with st.expander("Filtrar números por tipo / año / volumen", expanded=False):
+    with st.expander("Filtrar numeros por tipo / anio / volumen", expanded=False):
         fcol1, fcol2, fcol3 = st.columns(3)
         with fcol1:
             tipos_unicos = ["Todos"] + sorted(df_issues["tipo"].unique().tolist())
             filtro_tipo = st.selectbox("Tipo", tipos_unicos, key="ftipo")
         with fcol2:
             anios_unicos = ["Todos"] + sorted([a for a in df_issues["anio"].unique() if a], reverse=True)
-            filtro_anio = st.selectbox("Año", anios_unicos, key="fanio")
+            filtro_anio = st.selectbox("Anio", anios_unicos, key="fanio")
         with fcol3:
             vols_unicos = ["Todos"] + sorted([v for v in df_issues["volumen"].unique() if v])
             filtro_vol = st.selectbox("Volumen", vols_unicos, key="fvol")
@@ -2964,7 +2960,7 @@ if st.session_state.df_issues is not None:
             df_filtrado = df_filtrado[df_filtrado["anio"] == filtro_anio]
         if filtro_vol != "Todos":
             df_filtrado = df_filtrado[df_filtrado["volumen"] == filtro_vol]
-        st.info(f"Mostrando {len(df_filtrado)} de {len(df_issues)} números")
+        st.info(f"Mostrando {len(df_filtrado)} de {len(df_issues)} numeros")
 
     if "df_filtrado" not in dir():
         df_filtrado = df_issues.copy()
@@ -2973,59 +2969,80 @@ if st.session_state.df_issues is not None:
                     if c in df_filtrado.columns]
     st.dataframe(
         df_filtrado[cols_mostrar].rename(columns={
-            "issue": "Título", "tipo": "Tipo", "anio": "Año",
-            "volumen": "Vol.", "numero": "Núm.", "issue_url": "URL"
+            "issue": "Titulo", "tipo": "Tipo", "anio": "Anio",
+            "volumen": "Vol.", "numero": "Num.", "issue_url": "URL"
         }),
         use_container_width=True, height=260, hide_index=True
     )
 
-    st.markdown('<div class="section-header">📥 Extracción de artículos</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header">Extraccion de articulos</div>', unsafe_allow_html=True)
     col_n1, col_n2 = st.columns([2, 1])
     with col_n1:
-        usar_filtrado = st.checkbox("Usar solo los números filtrados", value=False)
+        usar_filtrado = st.checkbox("Usar solo los numeros filtrados", value=False)
         df_para_extraer = df_filtrado if usar_filtrado else df_issues
     with col_n2:
         n_analizar = st.number_input(
-            "¿Cuántos números analizar?",
+            "Cuantos numeros analizar?",
             min_value=1, max_value=len(df_para_extraer),
             value=min(3, len(df_para_extraer)),
         )
 
     extraer_btn = st.button(
-        "📥 Extraer artículos (metadatos completos + ORCID)",
+        "Extraer articulos (metadatos completos + ORCID)",
         type="primary", use_container_width=True
     )
 
     if extraer_btn:
         df_sel = df_para_extraer.head(int(n_analizar))
-        todos = []
-        prog = st.progress(0, text="Iniciando extracción…")
+
+        if st.session_state.df_articulos is None:
+            st.session_state.df_articulos = pd.DataFrame()
+
+        todos_locales = st.session_state.df_articulos.to_dict("records") if not st.session_state.df_articulos.empty else []
+
+        prog = st.progress(0, text="Iniciando extraccion a alta velocidad...")
         status = st.empty()
-        for i, (_, row) in enumerate(df_sel.iterrows()):
-            issue_meta = row.to_dict()
-            status.info(f"📖 Procesando: **{row['issue']}**")
-            arts = extraer_articulos_issue_completo(row["issue_url"], issue_meta)
-            todos.extend(arts)
-            prog.progress((i + 1) / len(df_sel),
-                          text=f"Número {i+1}/{len(df_sel)} — {len(arts)} artículos")
-            time.sleep(0.3)
-        prog.empty(); status.empty()
-        if todos:
-            df_art = pd.DataFrame(todos).drop_duplicates(subset=["articulo_url"])
-            st.session_state.df_articulos = df_art
-            st.session_state.resultados = None
-            st.success(f"{len(df_art)} artículos extraídos de {int(n_analizar)} números.")
-        else:
-            st.error("No se pudieron extraer artículos.")
+
+        try:
+            for i, (_, row) in enumerate(df_sel.iterrows()):
+                issue_meta = row.to_dict()
+                status.info(f"Procesando: **{row['issue']}**")
+
+                arts = extraer_articulos_issue_completo(row["issue_url"], issue_meta)
+                todos_locales.extend(arts)
+
+                # Guardado incremental: si falla en el numero 10, los 9 anteriores ya estan guardados
+                df_temporal = pd.DataFrame(todos_locales).drop_duplicates(subset=["articulo_url"])
+                st.session_state.df_articulos = df_temporal
+
+                prog.progress((i + 1) / len(df_sel),
+                              text=f"Numero {i+1}/{len(df_sel)} procesado - {len(df_temporal)} articulos extraidos en total")
+
+                time.sleep(0.5)
+
+        except Exception as e:
+            st.error(f"Se detecto una interrupcion de red: {e}")
+            st.warning("El proceso se detuvo para proteger los datos, pero el avance hasta ahora ha sido guardado.")
+
+        finally:
+            prog.empty()
+            status.empty()
+            gc.collect()
+
+            if st.session_state.df_articulos is not None and not st.session_state.df_articulos.empty:
+                st.success(f"Extraccion finalizada. Total disponible: {len(st.session_state.df_articulos)} articulos.")
+                st.session_state.resultados = None
+            else:
+                st.error("No se pudieron extraer articulos.")
 
 
-# ═══════════════════════════════════════════════════════
-# PASO 3: VISUALIZAR ARTÍCULOS + SELECTOR DE PERÍODO
-# ═══════════════════════════════════════════════════════
-if st.session_state.df_articulos is not None:
+# =======================================================
+# PASO 3: VISUALIZAR ARTICULOS + SELECTOR DE PERIODO
+# =======================================================
+if st.session_state.df_articulos is not None and not st.session_state.df_articulos.empty:
     df_art_completo = st.session_state.df_articulos
 
-    st.markdown('<div class="section-header">📄 Artículos extraídos · Selección de período</div>',
+    st.markdown('<div class="section-header">Articulos extraidos · Seleccion de periodo</div>',
                 unsafe_allow_html=True)
 
     df_periodo, anio_ini, anio_fin = widget_selector_periodo(df_art_completo, key_prefix="main_period")
@@ -3035,9 +3052,9 @@ if st.session_state.df_articulos is not None:
     c_orcid = df_periodo["tiene_orcid"].fillna(False).astype(bool).sum() if "tiene_orcid" in df_periodo.columns else 0
 
     metricas_periodo = [
-        (len(df_periodo), "Artículos en período", ""),
+        (len(df_periodo), "Articulos en periodo", ""),
         (df_periodo["autores"].dropna().apply(lambda x: [a.strip() for a in x.split(",") if a.strip()])
-         .explode().nunique() if not df_periodo.empty else 0, "Autores únicos", "accent"),
+         .explode().nunique() if not df_periodo.empty else 0, "Autores unicos", "accent"),
         (c_doi, "Con DOI", "teal"),
         (c_orcid, "Con ORCID", "dark"),
     ]
@@ -3055,14 +3072,14 @@ if st.session_state.df_articulos is not None:
     for col, (val, label, cls) in zip(col_m2, [
         (c_abs, "Con Abstract", "teal"),
         (c_kw, "Con Keywords", ""),
-        (c_afil, "Con Afiliación", "accent"),
-        (c_pais, "País detectado", "dark"),
+        (c_afil, "Con Afiliacion", "accent"),
+        (c_pais, "Pais detectado", "dark"),
     ]):
         with col:
             st.markdown(f'<div class="metric-card {cls}"><h3>{val}</h3><p>{label}</p></div>',
                         unsafe_allow_html=True)
 
-    with st.expander("Ver tabla de artículos del período seleccionado", expanded=False):
+    with st.expander("Ver tabla de articulos del periodo seleccionado", expanded=False):
         cols_tabla = [c for c in [
             "issue", "anio_issue", "volumen_issue", "numero_issue",
             "articulo", "autores", "doi", "keywords",
@@ -3070,20 +3087,20 @@ if st.session_state.df_articulos is not None:
         ] if c in df_periodo.columns]
         st.dataframe(df_periodo[cols_tabla], use_container_width=True, height=320, hide_index=True)
 
-    st.markdown('<div class="section-header">🔬 Ejecutar análisis de contenido</div>',
+    st.markdown('<div class="section-header">Ejecutar analisis de contenido</div>',
                 unsafe_allow_html=True)
 
     if len(df_periodo) < 2:
-        st.warning("⚠️ Selecciona al menos 2 artículos para ejecutar el análisis.")
+        st.warning("Selecciona al menos 2 articulos para ejecutar el analisis.")
     else:
-        periodo_label = f"{anio_ini}–{anio_fin}" if anio_ini and anio_fin else "período completo"
+        periodo_label = f"{anio_ini}-{anio_fin}" if anio_ini and anio_fin else "periodo completo"
         analizar_btn = st.button(
-            f"🚀 Ejecutar análisis · {len(df_periodo)} artículos · {periodo_label}",
+            f"Ejecutar analisis · {len(df_periodo)} articulos · {periodo_label}",
             type="primary", use_container_width=True
         )
 
         if analizar_btn:
-            prog2 = st.progress(0, text="Iniciando…")
+            prog2 = st.progress(0, text="Iniciando...")
             status2 = st.empty()
 
             def cb(pct, msg):
@@ -3098,12 +3115,12 @@ if st.session_state.df_articulos is not None:
             if "df_articulos" in res:
                 st.session_state.df_analizado = res["df_articulos"]
             prog2.empty(); status2.empty()
-            st.success(f"✅ Análisis completado para el período {periodo_label}.")
+            st.success(f"Analisis completado para el periodo {periodo_label}.")
 
 
-# ═══════════════════════════════════════════════════════
+# =======================================================
 # PASO 4: RESULTADOS
-# ═══════════════════════════════════════════════════════
+# =======================================================
 if st.session_state.resultados is not None:
     res = st.session_state.resultados
     df_final = res.get("df_articulos", st.session_state.df_articulos)
@@ -3116,19 +3133,19 @@ if st.session_state.resultados is not None:
     st.markdown("---")
     st.markdown(f"""
     <div class="section-header">
-        📊 Resultados del análisis
-        {'· <span style="font-size:0.85rem;opacity:0.7;">Período: ' + periodo_label + '</span>' if periodo_label else ''}
+        Resultados del analisis
+        {'· <span style="font-size:0.85rem;opacity:0.7;">Periodo: ' + periodo_label + '</span>' if periodo_label else ''}
     </div>
     """, unsafe_allow_html=True)
 
     tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
-        "Temporal", "Números", "Metadatos",
-        "Autores", "Mapa", "Clusters", "Tópicos", "Red"
+        "Temporal", "Numeros", "Metadatos",
+        "Autores", "Mapa", "Clusters", "Topicos", "Red"
     ])
 
-    # ── Tab 1: TEMPORAL ───────────────────────────────────
+    # Tab 1: TEMPORAL
     with tab1:
-        st.subheader(f"Análisis temporal · {periodo_label}")
+        st.subheader(f"Analisis temporal · {periodo_label}")
         if st.session_state.df_articulos is not None:
             df_refilter, rf_ini, rf_fin = widget_selector_periodo(
                 st.session_state.df_articulos, key_prefix="tab1_period"
@@ -3139,7 +3156,7 @@ if st.session_state.resultados is not None:
                     if fig_key in figs_rf:
                         st.plotly_chart(figs_rf[fig_key], use_container_width=True)
                 if "conteo_anio" in figs_rf:
-                    st.subheader("Tabla resumen por año")
+                    st.subheader("Tabla resumen por anio")
                     st.dataframe(figs_rf["conteo_anio"], use_container_width=True, hide_index=True)
                 if "fig_vol" in figs_rf:
                     st.plotly_chart(figs_rf["fig_vol"], use_container_width=True)
@@ -3149,9 +3166,9 @@ if st.session_state.resultados is not None:
                 if fig_key in figs_temp:
                     st.plotly_chart(figs_temp[fig_key], use_container_width=True)
 
-    # ── Tab 2: NÚMEROS ────────────────────────────────────
+    # Tab 2: NUMEROS
     with tab2:
-        st.subheader("Artículos por número (issue)")
+        st.subheader("Articulos por numero (issue)")
         if st.session_state.df_articulos is not None:
             df_refilter2, _, _ = widget_selector_periodo(
                 st.session_state.df_articulos, key_prefix="tab2_period"
@@ -3160,14 +3177,14 @@ if st.session_state.resultados is not None:
                 conteo_iss = df_refilter2.groupby("issue").size().reset_index(name="num_articulos")
                 conteo_iss = conteo_iss.sort_values("num_articulos", ascending=False)
                 fig_iss = go.Figure(go.Bar(
-                    x=conteo_iss["issue"].apply(lambda t: t[:35] + "…" if len(t) > 35 else t),
+                    x=conteo_iss["issue"].apply(lambda t: t[:35] + "..." if len(t) > 35 else t),
                     y=conteo_iss["num_articulos"],
                     marker=dict(color=conteo_iss["num_articulos"], colorscale=BLUE_SCALE),
                     text=conteo_iss["num_articulos"], textposition="outside",
                 ))
                 fig_iss.update_layout(
                     xaxis=dict(title="", tickangle=-50, type="category"),
-                    yaxis=dict(title="Artículos"),
+                    yaxis=dict(title="Articulos"),
                     plot_bgcolor=PALETTE["50"], paper_bgcolor="white",
                     height=420, font=dict(color="#0a0a0a"),
                 )
@@ -3176,7 +3193,7 @@ if st.session_state.resultados is not None:
         else:
             st.plotly_chart(res.get("fig_issues_plotly", go.Figure()), use_container_width=True)
 
-    # ── Tab 3: METADATOS ──────────────────────────────────
+    # Tab 3: METADATOS
     with tab3:
         st.subheader("Presencia de metadatos")
         if st.session_state.df_articulos is not None:
@@ -3193,16 +3210,16 @@ if st.session_state.resultados is not None:
             "articulo", "autores", "doi", "keywords", "tiene_doi",
             "tiene_orcid", "tiene_abstract", "tiene_keywords", "tiene_afiliacion", "tiene_pais",
         ] if c in df_final.columns]
-        st.subheader("Detalle por artículo")
+        st.subheader("Detalle por articulo")
         st.dataframe(df_final[meta_cols], use_container_width=True, height=380, hide_index=True)
 
-    # ── Tab 4: AUTORES ────────────────────────────────────
+    # Tab 4: AUTORES
     with tab4:
-        st.subheader("Análisis de autores")
+        st.subheader("Analisis de autores")
 
         st.markdown(f"""
         <div style="background-color: {PALETTE['50']}; padding: 10px; border-radius: 5px; margin-bottom: 20px; border-left: 4px solid {PALETTE['600']};">
-        <b>Control de visualización:</b> Ajusta los autores en la nube. Límite máximo establecido en 100 para proteger el rendimiento de la aplicación.
+        <b>Control de visualizacion:</b> Ajusta los autores en la nube. Limite maximo establecido en 100 para proteger el rendimiento.
         </div>
         """, unsafe_allow_html=True)
         max_autores_nube = st.slider("Cantidad de autores en la nube", 10, 100, 40, key="slider_nube")
@@ -3224,15 +3241,15 @@ if st.session_state.resultados is not None:
                 col_nube, col_bar = st.columns([1, 1])
 
                 with col_nube:
-                    st.markdown("#### Nube de Palabras")
+                    st.markdown("#### Nube de palabras")
                     img_nube = generar_nube_autores_bytes(df_aut_din, max_autores_nube)
                     if img_nube:
-                        st.image(img_nube, caption=f"Nube de palabras (Top {max_autores_nube})", use_container_width=True)
+                        st.image(img_nube, caption=f"Nube de autores (Top {max_autores_nube})", use_container_width=True)
                     else:
                         st.info("Sin datos suficientes para generar la nube.")
 
                 with col_bar:
-                    st.metric("Autores únicos en período", len(df_aut_din))
+                    st.metric("Autores unicos en periodo", len(df_aut_din))
                     top20_din = df_aut_din.head(20)
                     fig_aut_din = go.Figure(go.Bar(
                         x=top20_din["num_articulos"], y=top20_din["autor"],
@@ -3241,8 +3258,8 @@ if st.session_state.resultados is not None:
                         text=top20_din["num_articulos"], textposition="outside",
                     ))
                     fig_aut_din.update_layout(
-                        title=dict(text="Top 20 autores por producción", font=dict(size=15, color="#0a0a0a")),
-                        xaxis=dict(title="Artículos"),
+                        title=dict(text="Top 20 autores por produccion", font=dict(size=15, color="#0a0a0a")),
+                        xaxis=dict(title="Articulos"),
                         yaxis=dict(title="", autorange="reversed"),
                         plot_bgcolor=PALETTE["50"], paper_bgcolor="white",
                         height=400, margin=dict(l=150, r=40, t=40, b=40),
@@ -3253,7 +3270,7 @@ if st.session_state.resultados is not None:
                 st.subheader("Directorio detallado")
                 st.dataframe(
                     df_aut_din.head(50), use_container_width=True, hide_index=True, height=380,
-                    column_config={"ORCID": st.column_config.LinkColumn("ORCID 🔗", display_text="Ver perfil")}
+                    column_config={"ORCID": st.column_config.LinkColumn("ORCID", display_text="Ver perfil")}
                 )
         else:
             df_aut = res["df_autores_count"].copy()
@@ -3262,22 +3279,22 @@ if st.session_state.resultados is not None:
             col_nube, col_bar = st.columns([1, 1])
 
             with col_nube:
-                st.markdown("#### Nube de Palabras")
+                st.markdown("#### Nube de palabras")
                 img_nube_stat = generar_nube_autores_bytes(df_aut, max_autores_nube)
                 if img_nube_stat:
-                    st.image(img_nube_stat, caption=f"Nube de palabras (Top {max_autores_nube})", use_container_width=True)
+                    st.image(img_nube_stat, caption=f"Nube de autores (Top {max_autores_nube})", use_container_width=True)
 
             with col_bar:
-                st.metric("Autores únicos en total", len(df_aut))
+                st.metric("Autores unicos en total", len(df_aut))
                 st.plotly_chart(res.get("fig_autores_plotly", go.Figure()), use_container_width=True)
 
             st.subheader("Directorio detallado")
             st.dataframe(df_aut.head(50), use_container_width=True, hide_index=True,
-                         column_config={"ORCID": st.column_config.LinkColumn("ORCID 🔗", display_text="Ver perfil")})
+                         column_config={"ORCID": st.column_config.LinkColumn("ORCID", display_text="Ver perfil")})
 
-    # ── Tab 5: MAPA ───────────────────────────────────────
+    # Tab 5: MAPA
     with tab5:
-        st.subheader("🌍 Mapa geográfico de autores")
+        st.subheader("Mapa geografico de autores")
         if st.session_state.df_articulos is not None:
             df_refilter5, _, _ = widget_selector_periodo(
                 st.session_state.df_articulos, key_prefix="tab5_period"
@@ -3287,8 +3304,8 @@ if st.session_state.resultados is not None:
                 if fig_mapa_din is not None:
                     st.markdown("""
                     <div class="network-controls">
-                    💡 <b>Burbujas</b> = países (tamaño proporcional a autores).
-                    <b>Líneas</b> = colaboraciones internacionales en el mismo artículo.
+                    Burbujas = paises (tamano proporcional a autores).
+                    Lineas = colaboraciones internacionales en el mismo articulo.
                     </div>
                     """, unsafe_allow_html=True)
                     st.plotly_chart(fig_mapa_din, use_container_width=True)
@@ -3296,7 +3313,7 @@ if st.session_state.resultados is not None:
                     if fig_paises_din:
                         st.plotly_chart(fig_paises_din, use_container_width=True)
                     if not df_mapa_din.empty:
-                        st.subheader("Resumen por país")
+                        st.subheader("Resumen por pais")
                         df_pais_res = (df_mapa_din.groupby("pais")
                                        .agg(autores=("autor", "count"),
                                             articulos=("articulo", "nunique"))
@@ -3304,25 +3321,25 @@ if st.session_state.resultados is not None:
                                        .sort_values("autores", ascending=False))
                         st.dataframe(df_pais_res, use_container_width=True, hide_index=True)
                 else:
-                    st.info("No se detectaron países en este período.")
+                    st.info("No se detectaron paises en este periodo.")
         else:
             fig_mapa = res.get("fig_mapa")
             if fig_mapa:
                 st.plotly_chart(fig_mapa, use_container_width=True)
 
-    # ── Tab 6: CLUSTERS ───────────────────────────────────
+    # Tab 6: CLUSTERS
     with tab6:
-        st.subheader(f"Clustering Temático · {periodo_label}")
+        st.subheader(f"Clustering Tematico · {periodo_label}")
 
         st.markdown("""
         <div class="explanation-box">
-        <h4>🔬 ¿Cómo se calculan los clusters?</h4>
-        <p><b>1. TF-IDF:</b> Cada artículo (título + resumen + keywords) se convierte en un vector numérico.
-        Las palabras raras y específicas (ej: "sismología") tienen mayor peso que las comunes (ej: "estudio").</p>
-        <p><b>2. K-Means:</b> Agrupa los artículos en k clusters según la distancia euclídea entre sus vectores.
-        Los artículos dentro de un mismo cluster son más similares entre sí que con los de otros clusters.</p>
-        <p><b>3. PCA:</b> Reduce las miles de dimensiones TF-IDF a solo 2 (X,Y) para poder visualizarlos en una gráfica.</p>
-        <p><b>Filtro activo:</b> Se excluyen palabras genéricas como "artículo", "libro", "estudio", "investigación", etc.</p>
+        <h4>Como se calculan los clusters</h4>
+        <p><b>1. TF-IDF:</b> Cada articulo (titulo + resumen + keywords) se convierte en un vector numerico.
+        Las palabras raras y especificas (ej: "sismologia") tienen mayor peso que las comunes (ej: "estudio").</p>
+        <p><b>2. K-Means:</b> Agrupa los articulos en k clusters segun la distancia euclidea entre sus vectores.
+        Los articulos dentro de un mismo cluster son mas similares entre si que con los de otros clusters.</p>
+        <p><b>3. PCA:</b> Reduce las miles de dimensiones TF-IDF a solo 2 (X,Y) para poder visualizarlos en una grafica.</p>
+        <p><b>Filtro activo:</b> Se excluyen palabras genericas como "articulo", "libro", "estudio", "investigacion", etc.</p>
         </div>
         """, unsafe_allow_html=True)
 
@@ -3335,47 +3352,47 @@ if st.session_state.resultados is not None:
             st.plotly_chart(res.get("fig_pca_plotly", go.Figure()), use_container_width=True)
         st.plotly_chart(res.get("fig_clusters_plotly", go.Figure()), use_container_width=True)
 
-    # ── Tab 7: TÓPICOS ────────────────────────────────────
+    # Tab 7: TOPICOS
     with tab7:
-        st.subheader(f"Modelado de Tópicos LDA · {periodo_label}")
+        st.subheader(f"Modelado de Topicos LDA · {periodo_label}")
 
         topicos_reg = res.get("topicos_regionales", {})
 
         st.markdown("""
         <div class="explanation-box">
-        <h4>🏷️ ¿Cómo funciona LDA?</h4>
-        <p><b>LDA</b> (Latent Dirichlet Allocation) es un modelo probabilístico que asume dos cosas:</p>
-        <p>• Cada artículo es una <b>mezcla de tópicos</b> (ej: 70% geofísica + 30% historia).</p>
-        <p>• Cada tópico es una <b>distribución de palabras</b> (el tópico "sismos" asigna alta probabilidad a palabras como epicentro, magnitud, placa).</p>
-        <p>A diferencia de K-Means, LDA no asigna un artículo a un solo grupo, sino que calcula una probabilidad para cada tópico y asigna el de mayor valor.</p>
-        <p> <b>Tópico regional:</b> detectado automáticamente cuando el tópico contiene ≥2 términos geográficos.</p>
+        <h4>Como funciona LDA</h4>
+        <p><b>LDA</b> (Latent Dirichlet Allocation) es un modelo probabilistico que asume dos cosas:</p>
+        <p>- Cada articulo es una <b>mezcla de topicos</b> (ej: 70% geofisica + 30% historia).</p>
+        <p>- Cada topico es una <b>distribucion de palabras</b> (el topico "sismos" asigna alta probabilidad a palabras como epicentro, magnitud, placa).</p>
+        <p>A diferencia de K-Means, LDA no asigna un articulo a un solo grupo, sino que calcula una probabilidad para cada topico y asigna el de mayor valor.</p>
+        <p><b>Topico regional:</b> detectado automaticamente cuando el topico contiene 2 o mas terminos geograficos.</p>
         </div>
         """, unsafe_allow_html=True)
 
         if topicos_reg:
-            st.success(f" Se detectaron **{len(topicos_reg)}** tópicos con orientación regional: "
-                       + ", ".join([f"Tópico {t}" for t in topicos_reg.keys()]))
+            st.success(f"Se detectaron **{len(topicos_reg)}** topicos con orientacion regional: "
+                       + ", ".join([f"Topico {t}" for t in topicos_reg.keys()]))
 
         for t, terms in res["top_terms_topics"].items():
             regional_badge = "  [REGIONAL]" if t in topicos_reg else ""
-            with st.expander(f"Tópico {t}{regional_badge}: {', '.join(terms[:5])}"):
+            with st.expander(f"Topico {t}{regional_badge}: {', '.join(terms[:5])}"):
                 st.write(", ".join(terms))
                 if t in topicos_reg:
-                    st.info(f"Términos regionales detectados: {', '.join(topicos_reg[t])}")
+                    st.info(f"Terminos regionales detectados: {', '.join(topicos_reg[t])}")
 
         st.plotly_chart(res.get("fig_topicos_plotly", go.Figure()), use_container_width=True)
-        st.subheader("Nubes de palabras por tópico")
+        st.subheader("Nubes de palabras por topico")
         cols_wc = st.columns(2)
         for i, wc_bytes in enumerate(res["wc_figs"]):
             if wc_bytes:
-                regional = "  " if i in topicos_reg else ""
+                regional = " [R]" if i in topicos_reg else ""
                 with cols_wc[i % 2]:
-                    st.image(wc_bytes, caption=f"Tópico {i}{regional}", use_container_width=True)
+                    st.image(wc_bytes, caption=f"Topico {i}{regional}", use_container_width=True)
 
-    # ── Tab 8: RED ────────────────────────────────────────
+    # Tab 8: RED
     with tab8:
         G = res.get("grafo_G", nx.Graph())
-        st.subheader(f"Red interactiva de coautoría · {periodo_label}")
+        st.subheader(f"Red interactiva de coautoria · {periodo_label}")
 
         col_r1, col_r2, col_r3, col_r4 = st.columns(4)
         with col_r1: st.metric("Autores en red", G.number_of_nodes())
@@ -3383,19 +3400,19 @@ if st.session_state.resultados is not None:
         with col_r3:
             n_con_orcid = sum(1 for n in G.nodes()
                               if G.nodes[n].get("orcid") or orcid_map.get(n))
-            st.metric("Con ORCID 🔗", n_con_orcid)
+            st.metric("Con ORCID", n_con_orcid)
         with col_r4:
             n_paises_red = len(set(G.nodes[n].get("pais","") for n in G.nodes()
                                    if G.nodes[n].get("pais")))
-            st.metric("Países en red ", n_paises_red)
+            st.metric("Paises en red", n_paises_red)
 
         if G.number_of_edges() > 0:
             st.markdown("""
             <div class="network-controls">
-            💡 <b>Clic</b> = detalles y co-autores.
-            <b>Doble clic</b> = abrir perfil ORCID.
-            <b>🔗 botón</b> = resaltar solo autores con ORCID.
-            <b>Búsqueda</b> por nombre, país o institución.
+            Clic = detalles y co-autores.
+            Doble clic = abrir perfil ORCID.
+            Boton "Solo con ORCID" = resaltar autores con identificador ORCID.
+            Busqueda por nombre, pais o institucion.
             </div>
             """, unsafe_allow_html=True)
             html_red = generar_red_interactiva_html(G, orcid_map, df_final)
@@ -3404,37 +3421,36 @@ if st.session_state.resultados is not None:
             st.subheader("Directorio de autores")
             df_autores_red = pd.DataFrame([{
                 "Autor": n,
-                "Artículos": G.nodes[n].get("articulos", 0),
-                "Tópico": G.nodes[n].get("topico", "—"),
+                "Articulos": G.nodes[n].get("articulos", 0),
+                "Topico": G.nodes[n].get("topico", "-"),
                 "Co-autores": G.degree(n),
-                "País": G.nodes[n].get("pais", ""),
-                "Afiliación": G.nodes[n].get("afiliacion", "")[:60],
+                "Pais": G.nodes[n].get("pais", ""),
+                "Afiliacion": G.nodes[n].get("afiliacion", "")[:60],
                 "ORCID URL": G.nodes[n].get("orcid", "") or orcid_map.get(n, ""),
-                "ORCID": "" if (G.nodes[n].get("orcid") or orcid_map.get(n)) else "—",
-            } for n in G.nodes()]).sort_values("Artículos", ascending=False)
+            } for n in G.nodes()]).sort_values("Articulos", ascending=False)
 
             st.dataframe(
                 df_autores_red, use_container_width=True, height=380,
                 column_config={
-                    "ORCID URL": st.column_config.LinkColumn("ORCID 🔗", display_text="Ver perfil"),
+                    "ORCID URL": st.column_config.LinkColumn("ORCID", display_text="Ver perfil"),
                 },
                 hide_index=True
             )
         else:
-            st.info("No se encontraron pares de coautoría. Prueba ampliando el rango de años.")
+            st.info("No se encontraron pares de coautoria. Prueba ampliando el rango de anios.")
 
-    # ── EXPORTAR ──────────────────────────────────────────
+    # EXPORTAR
     st.markdown("---")
-    st.markdown("## 📥 Exportar resultados")
-    periodo_str = f"{anio_ini}–{anio_fin}" if anio_ini and anio_fin else "período completo"
+    st.markdown("## Exportar resultados")
+    periodo_str = f"{anio_ini}-{anio_fin}" if anio_ini and anio_fin else "periodo completo"
 
     col_dl1, col_dl2, col_dl3 = st.columns(3)
 
     with col_dl1:
-        with st.spinner("Generando PDF…"):
+        with st.spinner("Generando PDF..."):
             pdf_bytes = generar_pdf(url_usada, df_final, res, periodo_str)
         st.download_button(
-            label=f"⬇ Descargar PDF · {periodo_str}",
+            label=f"Descargar PDF · {periodo_str}",
             data=pdf_bytes,
             file_name=f"informe_ojs_v5_{anio_ini or 'all'}_{anio_fin or 'all'}_{time.strftime('%Y%m%d')}.pdf",
             mime="application/pdf",
@@ -3443,7 +3459,7 @@ if st.session_state.resultados is not None:
         )
 
     with col_dl2:
-        with st.spinner("Generando Excel…"):
+        with st.spinner("Generando Excel..."):
             excel_bytes = generar_excel(df_final, res, periodo_str)
         st.download_button(
             label=f"Descargar Excel · {periodo_str}",
@@ -3463,25 +3479,28 @@ if st.session_state.resultados is not None:
             use_container_width=True,
         )
 
-    st.info(f"Exportaciones listas · {len(df_final)} artículos · Período {periodo_str} · "
-            f"Excel con {10} hojas temáticas")
+    st.info(f"Exportaciones listas · {len(df_final)} articulos · Periodo {periodo_str} · "
+            f"Excel con 10 hojas tematicas")
 
 
 elif st.session_state.df_issues is None:
     st.markdown(f"""
     <div class="info-box">
-        <h4> ¿Cómo empezar?</h4>
-        <p>Ingresa la URL del <b>archivo de números</b> de una revista OJS en el panel lateral
+        <h4>Como empezar</h4>
+        <p>Ingresa la URL del <b>archivo de numeros</b> de una revista OJS en el panel lateral
         y presiona <b>Cargar revista</b>.</p>
         <p><b>Ejemplo:</b> <code>https://revistagi.geofisica.unam.mx/index.php/RGI/issue/archive</code></p>
         <p><b>Novedades v5:</b></p>
         <ul>
-          <li> Paleta de colores azul personalizada (texto en negro)</li>
-          <li>Excel con <b>10 hojas temáticas</b> separadas (artículos, autores, clusters, tópicos, red...)</li>
-          <li>PDF con figuras + <b>explicaciones detalladas</b> de cada análisis</li>
-          <li>Filtro ampliado de stopwords académicas para clusters más precisos</li>
-          <li>Tópico regional detectado automáticamente en LDA</li>
-          <li>Red de coautoría corregida y más robusta</li>
+          <li>Paleta de colores azul personalizada (texto en negro)</li>
+          <li>Excel con <b>10 hojas tematicas</b> separadas (articulos, autores, clusters, topicos, red...)</li>
+          <li>PDF con figuras + <b>explicaciones detalladas</b> de cada analisis</li>
+          <li>Filtro ampliado de stopwords academicas para clusters mas precisos</li>
+          <li>Topico regional detectado automaticamente en LDA</li>
+          <li>Red de coautoria corregida y mas robusta</li>
+          <li>Extraccion paralela con multithreading (hasta 5x mas rapido)</li>
+          <li>Sesion de red robusta con auto-reintento ante fallos del servidor</li>
+          <li>Guardado incremental de articulos para proteger el avance</li>
         </ul>
     </div>
     """, unsafe_allow_html=True)
