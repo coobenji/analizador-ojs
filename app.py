@@ -5,7 +5,6 @@ Analizador de Revistas OJS v5
 
 import streamlit as st
 import requests
-from bs4 import BeautifulSoup
 import pandas as pd
 import urllib3
 import time
